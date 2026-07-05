@@ -1,0 +1,2 @@
+pywebtransport>=0.18.1
+aiohttp>=3.9

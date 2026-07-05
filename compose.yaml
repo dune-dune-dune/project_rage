@@ -1,0 +1,18 @@
+name: autoantibug
+
+services:
+  video_gateway:
+    image: bluenviron/mediamtx:1.18.2
+    restart: unless-stopped
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: ${VIDEO_GATEWAY_HOST_IP:-}
+    ports:
+      # - "8888:8888" --- HLS is disabled, so this is not needed.
+      - "8889:8889"
+      - "8189:8189/udp"
+      # Publish RTSP only if external publishers/readers are needed.
+      # - "8554:8554"
+    volumes:
+      - ./services/video_gateway/mediamtx.yml:/mediamtx.yml:ro
+
+

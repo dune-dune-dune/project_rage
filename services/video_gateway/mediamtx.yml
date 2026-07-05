@@ -1,0 +1,44 @@
+logLevel: info
+
+hls: false
+hlsAddress: :8888
+
+webrtc: true
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcLocalTCPAddress: ""
+webrtcIPsFromInterfaces: true
+webrtcAdditionalHosts: []
+
+paths:
+  # For same-LAN cameras start with UDP to minimize pull latency.
+  # If packet loss or Docker/NAT issues appear, switch these back to tcp.
+  cam95_main:
+    source: rtsp://192.168.88.95:554/av0_0
+    sourceOnDemand: true
+    rtspTransport: udp
+
+  cam95_sub1:
+    source: rtsp://192.168.88.95:554/av0_1
+    sourceOnDemand: true
+    rtspTransport: udp
+
+  cam95_sub2:
+    source: rtsp://192.168.88.95:554/av0_2
+    sourceOnDemand: true
+    rtspTransport: udp
+
+  cam96_main:
+    source: rtsp://192.168.88.96:554/av0_0
+    sourceOnDemand: true
+    rtspTransport: udp
+
+  cam96_sub1:
+    source: rtsp://192.168.88.96:554/av0_1
+    sourceOnDemand: true
+    rtspTransport: udp
+
+  cam96_sub2:
+    source: rtsp://192.168.88.96:554/av0_2
+    sourceOnDemand: true
+    rtspTransport: udp
