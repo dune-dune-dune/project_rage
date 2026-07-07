@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>RWS Cockpit</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='cockpit.css') }}" />
+</head>
+<body>
+  <!-- Fullscreen camera feed (WHEP / WebRTC from MediaMTX). -->
+  <video id="video" autoplay muted playsinline></video>
+
+  <!-- Movable aiming crosshair (position from settings, persisted server-side). -->
+  <div id="crosshair" aria-hidden="true">
+    <svg viewBox="0 0 100 100" width="100" height="100">
+      <circle cx="50" cy="50" r="26" fill="none" stroke-width="1.5" />
+      <line x1="50" y1="6"  x2="50" y2="34" stroke-width="1.5" />
+      <line x1="50" y1="66" x2="50" y2="94" stroke-width="1.5" />
+      <line x1="6"  y1="50" x2="34" y2="50" stroke-width="1.5" />
+      <line x1="66" y1="50" x2="94" y2="50" stroke-width="1.5" />
+      <circle cx="50" cy="50" r="1.5" />
+    </svg>
+  </div>
+
+  <!-- Settings button + panel (top-right). -->
+  <button id="settings-btn" title="Налаштування" aria-label="Налаштування">⚙</button>
+  <div id="settings-panel" hidden>
+    <div class="sp-title">Приціл</div>
+    <label>Горизонталь <span id="xh-val">0</span>%
+      <input id="xh" type="range" min="-50" max="50" step="1" value="0" />
+    </label>
+    <label>Вертикаль <span id="xv-val">0</span>%
+      <input id="xv" type="range" min="-50" max="50" step="1" value="0" />
+    </label>
+    <button id="xh-reset" type="button">Скинути в центр</button>
+  </div>
+
+  <!-- Heads-up overlay. -->
+  <div id="hud">
+    <div class="hud-row">
+      <span id="safety" class="badge safe">SAFE</span>
+      {% if dry_run %}<span class="badge dry">DRY-RUN</span>{% endif %}
+      <span id="firemode" class="badge">FIRE —</span>
+      <span id="zoom" class="badge">1.0×</span>
+      <span id="turret" class="badge">TURRET —</span>
+      <span id="camera" class="badge">CAM —</span>
+      <span id="link" class="badge">NO VIDEO</span>
+    </div>
+    <div class="hud-row" id="axes">
+      <span class="key" data-k="up">W</span>
+      <span class="key" data-k="left">A</span>
+      <span class="key" data-k="down">S</span>
+      <span class="key" data-k="right">D</span>
+      <span class="key" data-k="fire">SPACE</span>
+    </div>
+    <div class="hud-row hint">
+      W/A/S/D — рух · F — запобіжник · Space — постріл · M — режим · Q/E — зум · TAB — камера
+    </div>
+  </div>
+
+  <script>
+    window.__CAMERAS__ = {{ cameras | tojson }};
+    window.__CROSSHAIR__ = {{ crosshair | tojson }};
+    window.__FIRE_MODE__ = {{ fire_mode | tojson }};
+  </script>
+  <script src="{{ url_for('static', filename='cockpit.js') }}"></script>
+</body>
+</html>

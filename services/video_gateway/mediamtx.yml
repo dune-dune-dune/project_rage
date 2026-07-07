@@ -11,34 +11,86 @@ webrtcIPsFromInterfaces: true
 webrtcAdditionalHosts: []
 
 paths:
-  # For same-LAN cameras start with UDP to minimize pull latency.
-  # If packet loss or Docker/NAT issues appear, switch these back to tcp.
+  # RTSP-over-TCP: UDP RTP from the cameras times out through Docker Desktop's
+  # NAT (macOS/Windows), so TCP is used for reliable pulls. On a Linux host with
+  # direct L2 access to the cameras, `udp` gives slightly lower latency.
   cam95_main:
     source: rtsp://192.168.88.95:554/av0_0
     sourceOnDemand: true
-    rtspTransport: udp
+    rtspTransport: tcp
 
   cam95_sub1:
     source: rtsp://192.168.88.95:554/av0_1
     sourceOnDemand: true
-    rtspTransport: udp
+    rtspTransport: tcp
 
   cam95_sub2:
     source: rtsp://192.168.88.95:554/av0_2
     sourceOnDemand: true
-    rtspTransport: udp
+    rtspTransport: tcp
 
   cam96_main:
     source: rtsp://192.168.88.96:554/av0_0
     sourceOnDemand: true
-    rtspTransport: udp
+    rtspTransport: tcp
 
   cam96_sub1:
     source: rtsp://192.168.88.96:554/av0_1
     sourceOnDemand: true
-    rtspTransport: udp
+    rtspTransport: tcp
 
   cam96_sub2:
     source: rtsp://192.168.88.96:554/av0_2
     sourceOnDemand: true
-    rtspTransport: udp
+    rtspTransport: tcp
+
+  # --- H264 transcoded paths (browser-compatible everywhere) ---
+  # All camera streams are H265/HEVC, which only Safari (and Chrome on
+  # HEVC-capable hardware) can play over WebRTC. These paths transcode to H264
+  # with ffmpeg on demand so any browser works. Requires the `-ffmpeg` image.
+  #
+  # Low-latency tuning: default paths transcode the 640x480 sub-stream (av0_1),
+  # which always keeps up with real time (so latency never accumulates), with
+  # nobuffer input, a 0.5 s keyframe interval and x264 zerolatency. HD variants
+  # (av0_0, 1080p) are heavier — use only if the host has CPU headroom.
+  #
+  # Shared flags kept identical across paths; only the source stream differs.
+  cam95_h264:
+    runOnDemand: >
+      ffmpeg -fflags nobuffer -flags low_delay -rtsp_transport tcp
+      -i rtsp://192.168.88.95:554/av0_1
+      -c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline
+      -pix_fmt yuv420p -g 15 -bf 0 -force_key_frames expr:gte(t,n_forced*0.5) -an
+      -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnDemandRestart: yes
+    runOnDemandCloseAfter: 10s
+
+  cam96_h264:
+    runOnDemand: >
+      ffmpeg -fflags nobuffer -flags low_delay -rtsp_transport tcp
+      -i rtsp://192.168.88.96:554/av0_1
+      -c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline
+      -pix_fmt yuv420p -g 15 -bf 0 -force_key_frames expr:gte(t,n_forced*0.5) -an
+      -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnDemandRestart: yes
+    runOnDemandCloseAfter: 10s
+
+  cam95_h264_hd:
+    runOnDemand: >
+      ffmpeg -fflags nobuffer -flags low_delay -rtsp_transport tcp
+      -i rtsp://192.168.88.95:554/av0_0
+      -c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline
+      -pix_fmt yuv420p -g 15 -bf 0 -force_key_frames expr:gte(t,n_forced*0.5) -an
+      -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnDemandRestart: yes
+    runOnDemandCloseAfter: 10s
+
+  cam96_h264_hd:
+    runOnDemand: >
+      ffmpeg -fflags nobuffer -flags low_delay -rtsp_transport tcp
+      -i rtsp://192.168.88.96:554/av0_0
+      -c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline
+      -pix_fmt yuv420p -g 15 -bf 0 -force_key_frames expr:gte(t,n_forced*0.5) -an
+      -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnDemandRestart: yes
+    runOnDemandCloseAfter: 10s

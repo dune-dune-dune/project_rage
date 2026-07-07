@@ -2,7 +2,8 @@
 
 Стек керування дистанційно керованою **водяною турелю** (RWS — Remote Weapon Station). Проєкт містить
 самодостатній контролер керування з клавіатури, який напряму спілкується з турелю по UDP, а також
-набір сервісів для браузерного пульта з відео (у розробці).
+**браузерний пульт на Flask + Gunicorn** (`services/web/`): відео на весь екран і керування з клавіш
+W/A/S/D (рух), F (запобіжник), Space (постріл).
 
 > ⚠️ **Безпека.** За замовчуванням команди йдуть на **реальну турель** (`192.168.88.56:7780`).
 > Для будь-яких тестів без обладнання використовуйте `--dry-run` (сокет не відкривається).
@@ -18,7 +19,7 @@
 | Контролер з клавіатури | `test_rws_control.py` | Інтерактивне live-керування турелю з терміналу |
 | Ядро протоколу | `rws_control.py` | Формування 40-байтних UDP-команд, розбір відповідей, контрольна сума |
 | rws_bridge | `services/rws_bridge/` | Постійний драйвер турелі (WebSocket + 20 Гц контур, модель власності, safe-mode) |
-| web | `services/web/` | Браузерний пульт: WebTransport backend + TS/Vite фронтенд (прототип) |
+| web (кокпіт) | `services/web/` | Браузерний пульт: Flask + Gunicorn, відео на весь екран (WHEP), керування W/A/S/D/F/Space, стрімер RWS UDP 20 Гц |
 | video_gateway | `services/video_gateway/` | MediaMTX: RTSP з камер → WebRTC/WHEP у браузер |
 | research | `research/reverse_protocol/` | Специфікація протоколу (`unit_protocol.md`) + оригінальний код і pcap-捕captures |
 
@@ -69,22 +70,62 @@ python3 test_rws_control.py --dst-ip 192.168.88.56 --salt-file path/to/salt.bin
 
 ## Запуск сервісів
 
+### Браузерний пульт (Flask + Gunicorn)
+
+Керування:
+- **W/A/S/D** — рух (тримати). Рух доступний **завжди**, запобіжник на нього не впливає.
+- **F** — запобіжник: гейтить **лише постріл** (SAFE → вогонь заблоковано, ARMED → можна стріляти).
+- **Space** — постріл (поки утримується). **M** — режим вогню (short/medium/manual).
+- **Q/E** — цифровий зум +/−. **TAB** — перемкнути камеру.
+- **⚙** (вгорі праворуч) — налаштування прицілу: зсув по горизонталі/вертикалі; зберігається у
+  `services/web/data/crosshair.json` (для подальшого використання).
+
+У HUD видно запобіжник, режим вогню, зум, лінк турелі (`TURRET ONLINE/OFFLINE`) і камеру. Тюнінг
+(швидкості, тривалості пострілу, deadman) і список камер — у `services/web/settings.toml`.
+
+> **Відео / затримка.** Камери віддають H265, який у WebRTC грає лише Safari; тому за замовчуванням
+> MediaMTX транскодить у H264 (`bluenviron/mediamtx:1.18.2-ffmpeg`). Щоб уникнути ~2 с затримки, що
+> накопичується, транскодиться **суб-потік 640×480** (`av0_1`) — він завжди встигає в реальному часі;
+> keyframe кожні 0.5 с, `zerolatency`. HD-варіанти (`cam95_h264_hd` з 1080p) є в `mediamtx.yml`, але
+> навантажують CPU. RTSP тягнеться по **TCP** (UDP таймаутить через NAT Docker Desktop).
+
+**Linux (весь стек у Docker):**
+
 ```bash
-# Відео-шлюз (єдиний сервіс у compose.yaml)
+cd services/web
+cp .env.example .env          # відредагуйте: мережа, RWS_DRY_RUN, WHEP_URL
+docker compose up --build     # кокпіт :8000 + video_gateway :8889
+```
+
+**macOS / Windows** — у Docker Desktop немає host-мережі, тож контейнер не може прив'язатися до
+`RWS_SRC_IP`. Тому відео піднімаємо в Docker, а **кокпіт запускаємо нативно на хості**:
+
+```bash
+cd services/web
+cp .env.example .env
+# .env: RWS_DRY_RUN=false, RWS_SRC_IP=192.168.88.33, WHEP_URL=http://192.168.88.33:8889/cam95_main/whep
+docker compose up video_gateway   # лише відео (порти :8889 / :8189)
+./run-native.sh                    # кокпіт нативно (сам створить venv на python3.11+)
+```
+
+Спершу налаштуйте адресу `192.168.88.33` на інтерфейсі Mac (наприклад
+`sudo ifconfig en0 alias 192.168.88.33 255.255.255.0`). Кокпіт **повторює прив'язку сокета
+автоматично**, тож щойно IP з'явиться — почне слати команди без перезапуску. Відкрийте
+`http://localhost:8000`.
+
+> **Безпека кокпіта:** за замовч. `RWS_DRY_RUN=true` — сокет не відкривається, лише лог пакетів.
+> Реальне залізо: `RWS_DRY_RUN=false`. `GUNICORN_WORKERS` завжди **1** (жорстко в `gunicorn.conf.py`)
+> — єдиний власник UDP-сокета й лічильника послідовності.
+
+### Інші сервіси
+
+```bash
+# Відео-шлюз (єдиний сервіс у кореневому compose.yaml)
 VIDEO_GATEWAY_HOST_IP=192.168.88.33 docker compose up video_gateway
 
 # Драйвер турелі (запускається вручну на хості; конфіг через env-змінні)
 python3 services/rws_bridge/src/main.py       # WebSocket на :8765, 20 Гц контур
-
-# web-пульт (прототип): backend + фронтенд
-python3 services/web/backend/main.py          # WebTransport :4433, HTTP :8080
-cd services/web/frontend && npm install && npm run dev   # Vite :5173
 ```
-
-> **Важливо (поточний стан):** web-пульт — прототип. Backend приймає команди від браузера, але **ще не
-> пересилає** їх у `rws_bridge`, тож ланцюг «браузер → турель» не з'єднаний. Робочий шлях керування —
-> це `test_rws_control.py`. Повний перелік розбіжностей див. у розділі
-> [Known gaps](docs/architecture.md#known-gaps).
 
 ## Документація
 

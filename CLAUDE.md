@@ -15,8 +15,10 @@ Guidance for Claude Code when working in this repository.
 `project_rage` is a control stack for a remotely operated **water-shooting turret** (RWS — Remote
 Weapon Station). The mature, working control path is a standalone keyboard controller
 (`test_rws_control.py` + `rws_control.py`) that streams 40-byte UDP command packets to the turret at
-20 Hz. A set of services (`rws_bridge`, `web`, `video_gateway`) is being built toward a browser-based
-cockpit with live video, but the browser→turret chain is **not yet connected** (see Known gaps).
+20 Hz. A **Flask + Gunicorn web cockpit** (`services/web/`) offers a browser control path: full-screen
+WHEP video plus WASD/F/Space keys, with a background thread streaming the same 40-byte RWS UDP commands
+directly to the turret at 20 Hz (reusing `rws_control.py`, bypassing `rws_bridge`). `rws_bridge` remains
+a separate standalone driver; `video_gateway` serves the camera video.
 
 ⚠️ **Safety-critical.** Commands go to a real turret by default (`192.168.88.56:7780`). Use
 `--dry-run` for any test without hardware. Never send `arm`/`fire` unless the task explicitly requires
@@ -41,9 +43,12 @@ project_rage/
 ├── services/
 │   ├── rws_bridge/           # Async turret driver: WebSocket control + 20 Hz RWS loop + lease watchdog
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
-│   ├── web/                  # Browser cockpit (prototype)
-│   │   ├── backend/main.py   # WebTransport (:4433) + aiohttp /config.json (:8080)
-│   │   └── frontend/         # TypeScript + Vite (:5173): keyboard/gamepad/on-screen input, WHEP video
+│   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
+│   │   ├── app/{__init__,config,turret,routes,wsgi}.py  # factory, settings, control class, routes
+│   │   ├── app/templates/index.html + app/static/{cockpit.js,cockpit.css}  # fullscreen video + HUD
+│   │   ├── settings.toml     # control tuning (rates, axes, fire) — NOT secrets
+│   │   ├── .env.example       # network/deploy env template (user creates .env)
+│   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + video_gateway
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
 └── research/
     └── reverse_protocol/
@@ -77,16 +82,31 @@ python3 test_rws_control.py
 # Safe test without hardware:
 python3 test_rws_control.py --dry-run --verbose --packet-limit 5
 
-# Services
-VIDEO_GATEWAY_HOST_IP=192.168.88.33 docker compose up video_gateway   # video
+# Web cockpit (Flask + Gunicorn). Copy services/web/.env.example → services/web/.env first.
+# Linux (full stack in Docker):
+cd services/web && docker compose up --build          # cockpit :8000 + video_gateway :8889
+# macOS/Windows (Docker Desktop has no host networking → cockpit cannot bind the RWS
+# source IP in a container). Run video in Docker, cockpit natively on the host:
+cd services/web && docker compose up video_gateway    # video only
+cd services/web && ./run-native.sh                    # cockpit natively (auto venv on py3.11+)
+#   - run-native.sh / gunicorn.conf.py auto-load services/web/.env (python-dotenv).
+#   - the sender retries the socket bind until RWS_SRC_IP is configured on the host.
+
+# Other services
+VIDEO_GATEWAY_HOST_IP=192.168.88.33 docker compose up video_gateway   # video (root compose)
 python3 services/rws_bridge/src/main.py                                # bridge, WS :8765
-python3 services/web/backend/main.py                                   # web backend :4433/:8080
-cd services/web/frontend && npm install && npm run dev                 # frontend :5173
 ```
 
-Control keys are documented in [README.md](README.md). Summary: `WASD` latch axes, arrows momentary
-move, `1`/`2`/`4`/`5` = enable/slow/reload/forceHome, `Backspace` = safetyARM, `7`/`8`/`9` = fire mode,
-`Space` = fire, `[`/`]` = speed, `V` = stop, `Q` = quit. Ukrainian keyboard layouts are also mapped.
+**Cockpit keys:** `WASD` = momentary move (hold to move; **always available, not gated by safety**),
+`F` = safety toggle (**gates firing only**), `Space` = hold to fire, `M` = cycle fire mode
+(short/medium/manual), `Q`/`E` = digital zoom in/out, `TAB` = cycle camera. The ⚙ button (top-right)
+opens crosshair position settings (H/V offset), persisted server-side to `services/web/data/crosshair.json`
+via `/api/crosshair`. `ENABLE` stays on for the whole live session so the motors HOLD position (drops
+only on the deadman neutral packet); fire needs safety disengaged (ARMED).
+
+**TTY controller keys** (`test_rws_control.py`, [README.md](README.md)): `WASD` latch axes, arrows
+momentary move, `1`/`2`/`4`/`5` = enable/slow/reload/forceHome, `Backspace` = safetyARM, `7`/`8`/`9` =
+fire mode, `Space` = fire, `[`/`]` = speed, `V` = stop, `Q` = quit. Ukrainian layouts are also mapped.
 
 ## Architecture (short)
 
@@ -98,38 +118,39 @@ model. In brief:
 - **rws_bridge** is a self-contained driver: starts in **safe mode** (neutral packets), single-owner
   ownership with a 4 s lease, edge-triggered fire, 12-byte `control_state` input protocol over
   WebSocket (`:8765`).
-- **web** is a prototype cockpit; the browser→bridge relay is not implemented (Known gaps).
+- **web cockpit** (`services/web/`): Flask serves the page; a single `TurretController` background
+  thread streams RWS UDP at 20 Hz. Movement is always available; the F safety gates **firing only**
+  (software fire interlock: `fire='F'` only when safety disengaged). 400 ms deadman, single Gunicorn
+  worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. HTTP routes:
+  `/`, `/healthz`, `/api/input`, `/api/status`, `/api/crosshair` (GET/POST).
 
 ## Known gaps (do not assume these work)
 
 Details in [docs/architecture.md#known-gaps](docs/architecture.md#known-gaps).
 
-1. Web backend decodes browser datagrams into memory but does **not** relay to `rws_bridge`.
-   `services/web/backend/config.py` and `.../transport/webtransport.py` are empty 0-byte placeholders.
-2. Protocol mismatch with a **dangerous bit collision**: frontend/backend send a **3-byte** joystick
-   datagram; `rws_bridge` expects the **12-byte** `control_state`. A naive `buttons → state_flags` copy
-   maps browser FIRE(0x01)→ENABLE and HOME(0x10)→FIRE. A relay must translate fields, never copy bytes.
-3. Web client performs no ownership/enable handshake (`take_control`/`presence`/enable bit) — a second
-   reason the web path can't drive the turret even with a relay.
-4. Web cockpit video is off by default (`VITE_WHEP_URL` is dead code; needs backend env `WHEP_URL`).
+1. The web cockpit **bypasses `rws_bridge`** — it drives RWS UDP directly and does not use the bridge's
+   ownership/lease/replay protection or telemetry. Run only one control path at a time against a turret.
+2. Live control needs `network_mode: host` (Linux only) to bind `RWS_SRC_IP:RWS_SRC_PORT`. On Docker
+   Desktop (macOS/Windows) only `RWS_DRY_RUN=true` works (the socket is never opened).
+3. `GUNICORN_WORKERS` **must stay 1** (hardcoded in the Dockerfile `CMD`). More workers = multiple UDP
+   senders with independent sequence counters = corrupt command stream.
+4. Web cockpit video is off unless `WHEP_URL` is set in `.env` and `video_gateway` + cameras are reachable.
 5. `.claude/settings.local.json` registers hooks `.claude/hooks/guard-bash.sh` / `guard-read.sh`, but
    `.claude/hooks/` does not exist.
-6. `services/web/Dockerfile` installs only `pywebtransport` (not `aiohttp`), and the backend needs the
-   `openssl` CLI at runtime (absent in `python:3.12-slim`) — cert hashing silently fails.
-7. `.env.development` uses `127.0.0.1` for WebTransport while the backend cert is issued for `localhost`;
-   the backend also mints a new cert each startup, breaking cached browser sessions on restart.
 
 This list is a summary — the full, detailed gaps + safety caveats live in
 [docs/architecture.md](docs/architecture.md#known-gaps).
 
 ## Conventions & gotchas
 
-- **Python:** code uses 3.10+ syntax but `from __future__ import annotations` lets it run on 3.9. The
-  keyboard controller is **POSIX-only** (`termios`/`tty`, `select`).
-- **Two protocols coexist:** raw RWS UDP (turret wire) vs. the relay `control_state`/`observed_state`
-  (frontend↔backend↔bridge). Do not confuse them.
-- **Only `video_gateway` is in `compose.yaml`** (Compose project name is `autoantibug`, so containers
-  are prefixed `autoantibug-…`). `rws_bridge` and `web` run on the host directly.
+- **Python:** the TTY controller uses 3.10+ syntax but `from __future__ import annotations` lets it run
+  on 3.9, and it is **POSIX-only** (`termios`/`tty`, `select`). The web cockpit needs **Python 3.11+**
+  (stdlib `tomllib`); its target runtime is the `python:3.12-slim` image.
+- **Two protocols coexist:** raw RWS UDP (turret wire, used by the TTY controller and the web cockpit)
+  vs. the bridge's `control_state`/`observed_state` (client↔`rws_bridge`). Do not confuse them.
+- **Root `compose.yaml` has only `video_gateway`** (Compose project `autoantibug`, containers prefixed
+  `autoantibug-…`). The web cockpit has its own `services/web/docker-compose.yml` (project `rws_cockpit`).
+  `rws_bridge` runs on the host directly.
 - **Testing:** prefer `--dry-run` and `--packet-limit`. There is no automated test suite despite the
   `pytest` permission entries in `.claude/settings.local.json`.
 - **Never commit or push unless the user asks.**

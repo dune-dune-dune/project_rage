@@ -1,0 +1,178 @@
+"""Configuration for the Flask turret cockpit.
+
+Two layers of settings are intentionally kept separate:
+
+* Deployment / network / secrets  -> environment variables (``.env``).
+* Control tuning (axis speeds, fire) -> ``settings.toml`` committed to the repo.
+
+Both are merged into a single immutable :class:`Settings` object at startup.
+"""
+
+from __future__ import annotations
+
+import os
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+
+# The 32-byte shared salt authenticating every command. It lives in
+# ``test_rws_control.py`` (DEFAULT_EMBEDDED_SALT); duplicated here so the web
+# service does not import the POSIX-only TTY controller. Overridable via
+# ``RWS_SALT_FILE``.
+DEFAULT_EMBEDDED_SALT = bytes.fromhex(
+    "262bd7b673f1371fd274f96f2e819032498f304b4021d3fc87d5db723f8fa277"
+)
+
+# Repository root, used only as a fallback so local runs can import rws_control.py
+# from the repo root. In the container the library sits next to the app on the
+# path, so this fallback is never exercised — guard against a shallow tree.
+_HERE = Path(__file__).resolve()
+_REPO_ROOT = _HERE.parents[3] if len(_HERE.parents) > 3 else _HERE.parents[-1]
+_DEFAULT_SETTINGS_PATH = _HERE.parents[1] / "settings.toml"
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return int(raw)
+
+
+@dataclass(frozen=True)
+class Settings:
+    # --- RWS network (turret) ---
+    src_ip: str
+    src_port: int
+    dst_ip: str
+    dst_port: int
+    dry_run: bool
+    salt: bytes
+
+    # --- Video ---
+    # List of {"label": str, "url": str} for the TAB camera switcher.
+    cameras: list[dict]
+
+    # --- Control tuning (settings.toml) ---
+    send_rate_hz: int
+    deadman_ms: int
+    speed_percent: int
+    rotation_v_unit: float
+    elevation_v_up_unit: float
+    elevation_v_down_unit: float
+    fire_mode: str
+    fire_duration_short: int
+    fire_duration_medium: int
+
+    # --- Persistence ---
+    crosshair_file: str
+
+    @property
+    def period_seconds(self) -> float:
+        return 1.0 / self.send_rate_hz
+
+    @property
+    def deadman_seconds(self) -> float:
+        return self.deadman_ms / 1000.0
+
+
+def load_env_file() -> None:
+    """Load services/web/.env into the environment for native (non-Docker) runs.
+
+    A no-op under Docker Compose (env_file already populated the environment) and
+    when python-dotenv is unavailable. Never overrides already-set variables.
+    """
+    env_path = _HERE.parents[1] / ".env"
+    if not env_path.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
+    load_dotenv(env_path, override=False)
+
+
+def _load_salt() -> bytes:
+    salt_file = os.environ.get("RWS_SALT_FILE", "").strip()
+    if not salt_file:
+        return DEFAULT_EMBEDDED_SALT
+    data = Path(salt_file).read_bytes()
+    if len(data) != 32:
+        raise ValueError(f"RWS_SALT_FILE must be exactly 32 bytes, got {len(data)}")
+    return data
+
+
+def _load_toml(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def _build_cameras(video: dict) -> list[dict]:
+    """Build the [{label, url}] camera list for the TAB switcher.
+
+    The gateway base comes from WHEP_BASE, else is derived from WHEP_URL, else
+    from VIDEO_GATEWAY_HOST_IP. Stream paths/labels come from settings.toml.
+    Falls back to a single camera from WHEP_URL when no streams are configured.
+    """
+    whep_url = os.environ.get("WHEP_URL", "").strip()
+    base = os.environ.get("WHEP_BASE", "").strip().rstrip("/")
+    if not base and whep_url:
+        # http://host:8889/cam95_h264/whep -> http://host:8889
+        base = whep_url.rsplit("/", 2)[0]
+    if not base:
+        ip = os.environ.get("VIDEO_GATEWAY_HOST_IP", "192.168.88.33").strip() or "192.168.88.33"
+        base = f"http://{ip}:8889"
+
+    cameras: list[dict] = []
+    for entry in video.get("streams", []):
+        path = str(entry.get("path", "")).strip()
+        if not path:
+            continue
+        cameras.append({"label": str(entry.get("label", path)), "url": f"{base}/{path}/whep"})
+
+    if not cameras and whep_url:
+        cameras.append({"label": "CAM", "url": whep_url})
+    return cameras
+
+
+def load_settings(settings_path: Path | None = None) -> Settings:
+    """Build the merged, immutable settings object read once at startup."""
+    load_env_file()
+    toml = _load_toml(settings_path or _DEFAULT_SETTINGS_PATH)
+    control = toml.get("control", {})
+    axes = toml.get("axes", {})
+    fire = toml.get("fire", {})
+    video = toml.get("video", {})
+
+    return Settings(
+        src_ip=os.environ.get("RWS_SRC_IP", "192.168.88.33"),
+        src_port=_env_int("RWS_SRC_PORT", 7770),
+        dst_ip=os.environ.get("RWS_DST_IP", "192.168.88.56"),
+        dst_port=_env_int("RWS_DST_PORT", 7780),
+        dry_run=_env_bool("RWS_DRY_RUN", True),
+        salt=_load_salt(),
+        cameras=_build_cameras(video),
+        send_rate_hz=int(control.get("send_rate_hz", 20)),
+        deadman_ms=int(control.get("deadman_ms", 400)),
+        speed_percent=int(control.get("speed_percent", 100)),
+        rotation_v_unit=float(axes.get("rotation_v_unit", 0.5)),
+        elevation_v_up_unit=float(axes.get("elevation_v_up_unit", 0.5)),
+        elevation_v_down_unit=float(axes.get("elevation_v_down_unit", 0.5)),
+        fire_mode=str(fire.get("mode", "short")),
+        fire_duration_short=int(fire.get("duration_short", 161)),
+        fire_duration_medium=int(fire.get("duration_medium", 605)),
+        crosshair_file=_crosshair_file(),
+    )
+
+
+def _crosshair_file() -> str:
+    data_dir = os.environ.get("COCKPIT_DATA_DIR", "").strip() or str(_HERE.parents[1] / "data")
+    return str(Path(data_dir) / "crosshair.json")

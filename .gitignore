@@ -1,2 +1,8 @@
 __pycache__
 .DS_Store
+
+# Local deployment secrets / network config (see services/web/.env.example)
+.env
+
+# Cockpit runtime data (persisted crosshair, etc.)
+services/web/data/

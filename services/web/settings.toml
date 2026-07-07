@@ -1,0 +1,28 @@
+# Control tuning for the turret cockpit.
+# Deployment / network / secrets live in .env — NOT here.
+
+[control]
+send_rate_hz = 20     # command stream cadence (20 Hz = 50 ms period)
+deadman_ms = 400      # no fresh browser input for longer than this -> neutral
+speed_percent = 100   # global speed scale, 10..100
+
+[axes]
+# Normalised velocity amplitudes (0..1) per axis.
+rotation_v_unit = 0.5
+elevation_v_up_unit = 0.5
+elevation_v_down_unit = 0.5
+
+[fire]
+mode = "short"        # short | medium | manual
+duration_short = 161
+duration_medium = 605
+
+# Camera switcher (TAB cycles through these). `path` is a MediaMTX path; the
+# full WHEP URL is <gateway base>/<path>/whep, where the base is derived from
+# WHEP_URL (or WHEP_BASE / VIDEO_GATEWAY_HOST_IP) in .env. Add the *_hd paths
+# here too if the host has CPU headroom for 1080p transcoding.
+[video]
+streams = [
+    { label = "CAM 95", path = "cam95_h264" },
+    { label = "CAM 96", path = "cam96_h264" },
+]

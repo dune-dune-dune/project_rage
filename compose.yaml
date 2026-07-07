@@ -2,7 +2,8 @@ name: autoantibug
 
 services:
   video_gateway:
-    image: bluenviron/mediamtx:1.18.2
+    # -ffmpeg variant bundles ffmpeg for the H264 transcode paths (cam*_h264).
+    image: bluenviron/mediamtx:1.18.2-ffmpeg
     restart: unless-stopped
     environment:
       MTX_WEBRTCADDITIONALHOSTS: ${VIDEO_GATEWAY_HOST_IP:-}

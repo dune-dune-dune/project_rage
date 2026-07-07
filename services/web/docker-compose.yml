@@ -1,0 +1,44 @@
+# Turret cockpit stack: Flask/Gunicorn control UI + MediaMTX video gateway.
+#
+# LINUX (full stack in Docker):
+#   cd services/web && cp .env.example .env && docker compose up --build
+#
+# macOS / Windows (Docker Desktop has NO host networking, so a container cannot
+# bind the RWS source IP): run ONLY the video gateway in Docker and the cockpit
+# natively on the host —
+#   cd services/web && cp .env.example .env
+#   docker compose up video_gateway        # video only
+#   ./run-native.sh                        # cockpit natively -> binds RWS_SRC_IP
+#
+# `cockpit` uses host networking to bind RWS_SRC_IP:RWS_SRC_PORT and reach the
+# turret; that works on Docker Engine (Linux) only.
+name: rws_cockpit
+
+services:
+  cockpit:
+    build:
+      # Build context is the repo root so rws_control.py is available.
+      context: ../..
+      dockerfile: services/web/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    network_mode: host
+    volumes:
+      # Live-editable control tuning without rebuilding the image.
+      - ./settings.toml:/app/settings.toml:ro
+      # Persist runtime data (crosshair position) across restarts.
+      - ./data:/app/data
+    depends_on:
+      - video_gateway
+
+  video_gateway:
+    # -ffmpeg variant bundles ffmpeg for the H264 transcode paths (cam*_h264).
+    image: bluenviron/mediamtx:1.18.2-ffmpeg
+    restart: unless-stopped
+    environment:
+      MTX_WEBRTCADDITIONALHOSTS: ${VIDEO_GATEWAY_HOST_IP:-}
+    ports:
+      - "8889:8889"        # WebRTC / WHEP signaling
+      - "8189:8189/udp"    # WebRTC local UDP media
+    volumes:
+      - ../video_gateway/mediamtx.yml:/mediamtx.yml:ro
