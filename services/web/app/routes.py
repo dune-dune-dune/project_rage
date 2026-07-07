@@ -30,6 +30,23 @@ def _ai_settings():
     return current_app.config["AI_SETTINGS"]
 
 
+def _asset_version() -> int:
+    """A cache-busting version stamp = newest mtime of the JS/CSS assets.
+
+    Appended as ?v=… to script/worker URLs so the browser never serves a stale
+    cached ai.js / ai-worker.js after a code change (a real footgun otherwise —
+    workers are cached aggressively).
+    """
+    static = current_app.static_folder or ""
+    latest = 0
+    for name in ("ai.js", "ai-worker.js", "cockpit.js", "cockpit.css"):
+        try:
+            latest = max(latest, int(os.path.getmtime(os.path.join(static, name))))
+        except OSError:
+            pass
+    return latest
+
+
 def _ai_config(settings) -> dict:
     """Client-side AI config injected into the page as window.__AI__.
 
@@ -41,6 +58,7 @@ def _ai_config(settings) -> dict:
     return {
         "model_url": url_for("cockpit.model_onnx"),
         "classes_url": url_for("cockpit.model_classes"),
+        "worker_url": url_for("static", filename="ai-worker.js") + f"?v={_asset_version()}",
         "model_available": os.path.exists(settings.model_file),
         "imgsz": settings.ai_imgsz,
         "gain": settings.track_gain,
@@ -63,6 +81,7 @@ def index():
         crosshair=_crosshair().load(),
         fire_mode=_controller().snapshot()["fire_mode"],
         ai=_ai_config(settings),
+        asset_version=_asset_version(),
     )
 
 

@@ -57,6 +57,7 @@ const AI = (() => {
   let workerLoading = null;
   let busy = false;        // a YOLO frame is in flight to the worker
   let classNames = {};
+  let lastYoloLog = 0;     // throttle for the diagnostic console log
 
   let mode = "off";        // "off" | "yolo" | "custom"
   let trackOn = false;
@@ -77,7 +78,8 @@ const AI = (() => {
     if (workerLoading) return workerLoading;
     if (cfg.model_available === false) return Promise.reject(new Error("model-missing"));
 
-    worker = new Worker("/static/ai-worker.js");
+    // Versioned URL busts the (aggressive) worker cache after a code change.
+    worker = new Worker(cfg.worker_url || "/static/ai-worker.js");
     workerLoading = new Promise((resolve, reject) => {
       worker.onmessage = (e) => {
         const m = e.data;
@@ -93,6 +95,13 @@ const AI = (() => {
             const pct = Math.round((m.maxScore || 0) * 100);
             aiBadge.textContent = `AI ${dets.length}·${pct}%`;
             aiBadge.className = "badge ai-on";
+            // Full diagnostic once per second: reveals whether few detections are
+            // caused by the confidence gate, the min-size gate, or the model itself.
+            const now = performance.now();
+            if (now - lastYoloLog > 1000) {
+              lastYoloLog = now;
+              console.log(`[AI] n=${dets.length} best=${pct}% | conf=${Math.round(conf * 100)}% min=${Math.round(minSize)}px vid=${lastVW}x${lastVH}`);
+            }
           }
         }
         else if (m.type === "error") {
@@ -226,7 +235,7 @@ const AI = (() => {
     const r = Math.min(IMGSZ / vw, IMGSZ / vh);
     const newW = vw * r, newH = vh * r;
     const padX = (IMGSZ - newW) / 2, padY = (IMGSZ - newH) / 2;
-    preCtx.fillStyle = "#000";
+    preCtx.fillStyle = "#727272"; // grey 114 — matches ultralytics letterbox padding
     preCtx.fillRect(0, 0, IMGSZ, IMGSZ);
     try {
       preCtx.drawImage(video, padX, padY, newW, newH);
