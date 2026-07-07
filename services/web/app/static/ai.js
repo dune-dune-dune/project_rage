@@ -235,7 +235,7 @@ const AI = (() => {
     const r = Math.min(IMGSZ / vw, IMGSZ / vh);
     const newW = vw * r, newH = vh * r;
     const padX = (IMGSZ - newW) / 2, padY = (IMGSZ - newH) / 2;
-    preCtx.fillStyle = "#727272"; // grey 114 — matches ultralytics letterbox padding
+    preCtx.fillStyle = "#000"; // BLACK padding — THIS model detects correctly only with black; grey degrades it badly
     preCtx.fillRect(0, 0, IMGSZ, IMGSZ);
     try {
       preCtx.drawImage(video, padX, padY, newW, newH);
