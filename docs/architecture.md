@@ -62,6 +62,71 @@ Key properties of the cockpit's `TurretController` ([`services/web/app/turret.py
 - **Dry-run.** `RWS_DRY_RUN=true` (default) never opens the socket; packets are built and logged only.
 - **Crosshair.** An adjustable aiming crosshair (⚙ panel) is persisted to `data/crosshair.json` via
   `GET`/`POST /api/crosshair` for reuse by later tooling.
+- **Auto-track aim override.** When the browser auto-tracker is active it POSTs a normalised aim velocity
+  to `/api/track` (`{active, rot, ele}`, each in [-1, 1]). `apply_track` stores it under the same lock and
+  refreshes the deadman. In `_build_packet`, an active+fresh aim **replaces** the WASD-derived motion with
+  the **exact same packet recipe as a held manual key** — proportional `rotation_v`/`elevation_v` plus a
+  full-scale ±π position target and the `*_P` valid bits (per axis sign). This matters: a velocity-only
+  packet (no position target/P bits) did **not** move the real turret, whereas the manual recipe does, so
+  auto-track commands it identically, only with a proportional velocity. It never touches `arm`/`fire` —
+  **auto-track aims, it never fires.** A separate `aim_timeout_ms` (default 500 ms) zeroes the aim if the
+  browser stops sending.
+
+## AI detection & auto-track path
+
+Detection and target selection run **entirely in the browser** ([`app/static/ai.js`](../services/web/app/static/ai.js)
++ [`ai-worker.js`](../services/web/app/static/ai-worker.js), ONNX Runtime Web) because that is where the
+frames, the active camera, the digital zoom and the crosshair offset all live; the Flask process (which owns
+the safety-critical 20 Hz sender thread) never decodes video and gains no torch/GPU dependency.
+
+**Two detection modes on the `I` key** (cycle OFF → YOLO → CUSTOM → OFF): **YOLO** runs the ONNX model in
+the worker; **CUSTOM** is a model-free pixel **motion** detector on the main thread — consecutive downscaled
+frames are diffed, pixels whose colour changes by more than the ⚙ `motion_thresh` % are marked moving,
+dilated and clustered into blobs (connected components), and blobs whose longer side exceeds `min_size`
+source-frame px are emitted as targets. CUSTOM does **ego-motion compensation**: the camera's global pan/tilt
+between frames (≈ an image translation) is estimated by 1D-correlating luminance projection profiles, and the
+previous frame is aligned by that shift before diffing — so when the turret slews the moving *background*
+cancels and only objects moving independently of the camera survive (a whole-frame "motion" guard drops
+frames where compensation fails). Both modes feed the same overlay draw + auto-track servo, so `T` tracks a
+motion blob exactly as it tracks a YOLO box.
+
+**YOLO inference runs in a Web Worker.** The main thread grabs the frame (2D-canvas `drawImage(video)` +
+black letterbox + `getImageData` — the *exact* pixel path of the proven main-thread version, so detection
+quality is preserved) and transfers the raw RGBA buffer (zero-copy) to the worker, which only builds the
+tensor, runs ONNX inference, decodes and NMSes. This split is deliberate: single-threaded WASM inference
+blocks its thread for 100–300 ms/frame, and on the *main* thread that would starve the `setInterval` timers
+sending `/api/input` + the heartbeat, tripping the 400 ms deadman and making manual control jerk or die.
+Off-thread, manual control stays smooth while AI is on. Only one frame is in flight at a time (`busy` gate),
+which throttles submission to the worker's actual inference rate. The auto-track command is DECOUPLED from
+the detection rate: detection only updates a target velocity, and a fixed 10 Hz timer re-POSTs it — so the
+turret tracks smoothly and the server aim never times out even when detection runs at only a few Hz.
+
+```
+Key I (cycle) → YOLO: main thread drawImage(<video>)→getImageData → transfer px to
+  worker: tensor → ONNX YOLOv8 → decode [1,4+nc,N] → filter conf (⚙) → min_size → NMS
+  CUSTOM: main thread frame-diff → threshold (⚙ motion %) → dilate → connected
+  components → filter min_size → blobs (no model, no worker)
+  main thread: draw boxes on #detections (cover + zoom mapping, matches #video)
+Key T (AI on) → on each result: pick target nearest the crosshair (then nearest to
+  previous lock) → error = target − crosshairFrame (normalised) → deadzone →
+  rot = clamp(gain·errX), ele = clamp(−gain·errY) → POST /api/track
+  (no target visible → POST active:false, so manual WASD works until one appears)
+```
+
+- **Closed-loop visual servo.** No camera FOV/lens calibration exists, so pixels cannot be mapped to an
+  absolute turret angle. Tracking instead drives *velocity proportional to the pixel error* and lets the
+  camera feedback null it to zero — robust without calibration; `gain`/`deadzone`/`max_velocity`
+  (`settings.toml [track]`) tune the feel.
+- **Crosshair offset is honoured.** The aim point is the crosshair's viewport position
+  `((50+cross.x)%, (50+cross.y)%)`, **not** the screen centre. `ai.js` inverts the `object-fit: cover` +
+  `scale(zoom)` transform to express it in the same frame-normalised space as the detections, so the target
+  is centred on the *offset* crosshair.
+- **Camera-agnostic.** Inference reads the same `<video>` element the operator sees, so `TAB` switching
+  cameras (95 ↔ 96) needs no server change; a switch just drops the current target lock.
+- **Model conversion (one-off, offline).** `scripts/export_onnx.py` converts `data/model/best.pt` →
+  `best.onnx` (+ `classes.json`) with ultralytics (`requirements-export.txt`, dev-only);
+  `scripts/fetch_ort.sh` vendors onnxruntime-web into `app/static/vendor/` (served locally, no runtime CDN).
+  Detection thresholds (`conf`, `min_size`) persist to `data/ai_settings.json` via `/api/ai-settings`.
 
 ## Video path
 
@@ -148,10 +213,15 @@ Deployment/network/secrets come from `.env` (see [`.env.example`](../services/we
 Control **tuning** lives separately in [`settings.toml`](../services/web/settings.toml) (read via
 stdlib `tomllib`, mounted read-only into the container so it can be edited without a rebuild):
 `[control]` send_rate_hz (20), deadman_ms (400), speed_percent (100); `[axes]` rotation/elevation unit
-amplitudes; `[fire]` mode + short/medium durations.
+amplitudes; `[fire]` mode + short/medium durations; `[track]` AI visual-servo `gain` (2.5), `deadzone`
+(0.02), `max_velocity` (0.5), `aim_timeout_ms` (500), `imgsz` (640, must match the ONNX export).
 
 HTTP routes ([`routes.py`](../services/web/app/routes.py)): `GET /` (cockpit page), `GET /healthz`,
-`POST /api/input` (JSON intent → controller, 204), `GET /api/status` (HUD snapshot).
+`POST /api/input` (JSON intent → controller, 204), `GET /api/status` (HUD snapshot, now incl.
+`track_active`), `GET`/`POST /api/crosshair`, `POST /api/track` (auto-aim velocity → controller, 204),
+`GET`/`POST /api/ai-settings` (conf, min size, Custom motion threshold, ego-motion max shift),
+`GET /assets/model.onnx` (exported weights),
+`GET /assets/classes.json` (class names).
 
 Gunicorn runs `app.wsgi:app` via [`gunicorn.conf.py`](../services/web/gunicorn.conf.py) (pins
 `workers=1`, reads `WEB_BIND`/`GUNICORN_THREADS`, and auto-loads `.env` through python-dotenv). The app
@@ -219,6 +289,16 @@ turret directly. The remaining gaps:
 6. **Stale reference stub.** `research/reverse_protocol/old/test_control.py` imports a `main` from a
    module `test_rws_control` that does not exist under `old/`. The old CLI's illustrative burst
    durations (100/1000/10000) do not match the real captured values (161/605/0).
+7. **AI mode needs a one-off build step.** `GET /assets/model.onnx` 404s until
+   `scripts/export_onnx.py` converts `data/model/best.pt` → `best.onnx`, and pressing `I` shows
+   `AI NO MODEL` / `AI ERROR` until both that and `scripts/fetch_ort.sh` (vendors onnxruntime-web into
+   `app/static/vendor/`) have run. `data/` and the vendored ORT files are gitignored/uncommitted, so a
+   fresh checkout or container must regenerate them. Browser inference speed depends on the client device
+   (single-thread WASM/SIMD); tracking tolerates a few Hz but a weak client will track sluggishly.
+8. **Auto-track is uncalibrated and open-loop on direction sign.** With no camera FOV data the servo
+   assumes image-right = turret-pan-right and image-down = tilt-down; if a camera is mounted mirrored the
+   `gain` sign (or axis) would need flipping. It is aim-only and never fires, but it *does* move a real
+   turret — run it with `RWS_DRY_RUN=true` first and keep the deadzone/gain conservative.
 
 ---
 

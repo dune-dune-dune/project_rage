@@ -1,0 +1,6 @@
+# Dev-only dependencies for the one-off ONNX export (scripts/export_onnx.py).
+# NOT installed in the cockpit runtime — the web service stays torch-free and
+# runs YOLO inference in the browser via ONNX Runtime Web.
+ultralytics>=8.1
+onnx>=1.15
+onnxslim>=0.1

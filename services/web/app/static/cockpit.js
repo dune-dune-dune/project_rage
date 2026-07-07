@@ -57,6 +57,9 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.code === "KeyQ") { zoomBy(+ZOOM_STEP); e.preventDefault(); return; }
   if (e.code === "KeyE") { zoomBy(-ZOOM_STEP); e.preventDefault(); return; }
+  // I toggles AI (YOLO) mode; T toggles auto-track (only meaningful in AI mode).
+  if (e.code === "KeyI") { if (window.AI) window.AI.toggle(); e.preventDefault(); return; }
+  if (e.code === "KeyT") { if (window.AI) window.AI.toggleTrack(); e.preventDefault(); return; }
   const axis = KEY_TO_AXIS[e.code];
   if (axis) {
     intent[axis] = true;
@@ -255,6 +258,8 @@ function nextCamera() {
   if (cameras.length < 2) return;
   camIndex = (camIndex + 1) % cameras.length;
   connectCamera(camIndex);
+  // The AI overlay/tracker must drop any locked target on a camera change.
+  if (window.AI && window.AI.onCameraSwitch) window.AI.onCameraSwitch();
 }
 
 function waitIceGathering(pc) {
@@ -272,3 +277,15 @@ function waitIceGathering(pc) {
 }
 
 connectCamera(camIndex);
+
+// ------------------------------------------------------- shared state for ai.js
+// Live getters so ai.js always reads the CURRENT crosshair offset (percent of
+// viewport from centre), digital zoom and active camera when mapping detections
+// and computing the aim error. Exposed rather than duplicated to keep one source
+// of truth.
+window.cockpit = {
+  get cross() { return cross; },     // {x, y} percent of viewport from centre
+  get zoom() { return zoom; },       // digital zoom scale applied to #video
+  get camIndex() { return camIndex; },
+  videoEl,
+};

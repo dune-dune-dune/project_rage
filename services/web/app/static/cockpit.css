@@ -20,6 +20,19 @@ html, body {
   transform-origin: center center; /* digital zoom scales from the centre */
 }
 
+/* YOLO detection overlay. Covers the viewport; boxes are drawn in viewport
+   pixels with the digital zoom baked into the math (no CSS transform here), so
+   they stay aligned with the zoomed #video. Sits above the video, below the
+   crosshair and HUD. */
+#detections {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 3;
+}
+
 /* Movable aiming crosshair. */
 #crosshair {
   position: fixed;
@@ -70,6 +83,7 @@ html, body {
 }
 #settings-panel[hidden] { display: none; }
 #settings-panel .sp-title { font-weight: 700; letter-spacing: 0.05em; font-size: 13px; }
+#settings-panel .sp-note { font-size: 11px; opacity: 0.65; line-height: 1.3; }
 #settings-panel label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 #settings-panel input[type="range"] { width: 100%; }
 #settings-panel button {
@@ -111,6 +125,8 @@ html, body {
 .badge.safe { background: #1f6f43; }
 .badge.armed { background: #b3261e; animation: pulse 1s infinite; }
 .badge.dry { background: #7a5c00; }
+.badge.ai-on { background: #1c6ea4; }
+.badge.track-on { background: #b3261e; animation: pulse 1s infinite; }
 
 @keyframes pulse { 50% { opacity: 0.55; } }
 

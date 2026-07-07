@@ -65,6 +65,15 @@ class _Intent:
 _FIRE_MODES = ("short", "medium", "manual")
 
 
+def _clamp_unit(value: object) -> float:
+    """Clamp an analog aim velocity to the normalised [-1.0, 1.0] range."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return max(-1.0, min(1.0, number))
+
+
 class TurretController:
     def __init__(self, settings: Settings) -> None:
         self._s = settings
@@ -72,6 +81,15 @@ class TurretController:
         self._intent = _Intent()
         self._fire_mode = settings.fire_mode if settings.fire_mode in _FIRE_MODES else "short"
         self._last_input_monotonic = 0.0
+
+        # --- Auto-track (visual servo) aim override, set from POST /api/track. ---
+        # When active and fresh, these normalised velocities replace the manual
+        # WASD-derived rotation/elevation velocities. They NEVER touch arm/fire —
+        # auto-track only aims; firing stays fully manual.
+        self._aim_active = False
+        self._aim_rot = 0.0
+        self._aim_ele = 0.0
+        self._last_aim_monotonic = 0.0
 
         # State owned exclusively by the sender thread — no lock needed for these.
         self._next_sequence = 0
@@ -155,6 +173,25 @@ class TurretController:
                 self._fire_mode = mode
             self._last_input_monotonic = time.monotonic()
 
+    def apply_track(self, payload: dict) -> None:
+        """Set the auto-track aim override from a browser POST.
+
+        ``payload`` is ``{active: bool, rot: float, ele: float}`` where rot/ele
+        are normalised velocities in [-1, 1] produced by the client-side visual
+        servo (target pixel error -> velocity). Refreshes the deadman so the
+        turret stays alive while tracking with no manual keys held.
+        """
+        active = bool(payload.get("active", False))
+        rot = _clamp_unit(payload.get("rot", 0.0)) if active else 0.0
+        ele = _clamp_unit(payload.get("ele", 0.0)) if active else 0.0
+        with self._lock:
+            self._aim_active = active
+            self._aim_rot = rot
+            self._aim_ele = ele
+            now = time.monotonic()
+            self._last_aim_monotonic = now
+            self._last_input_monotonic = now  # keep the deadman fed while tracking
+
     def _read_intent(self, now: float) -> _Intent | None:
         """Return a snapshot of intent, or None if the deadman has expired."""
         with self._lock:
@@ -162,6 +199,13 @@ class TurretController:
                 return None  # fail-safe: no fresh input -> fully neutral packet
             # Shallow copy so the sender thread reads a stable snapshot.
             return _Intent(**vars(self._intent))
+
+    def _read_aim(self, now: float) -> tuple[bool, float, float]:
+        """Return (active, rot_v, ele_v) for auto-track, or inert if stale."""
+        with self._lock:
+            if not self._aim_active or now - self._last_aim_monotonic > self._s.aim_timeout_seconds:
+                return (False, 0.0, 0.0)
+            return (True, self._aim_rot, self._aim_ele)
 
     # ------------------------------------------------------------------ send loop
     def _run_loop(self) -> None:
@@ -178,7 +222,10 @@ class TurretController:
                 self._try_open_channel(now)
 
             intent = self._read_intent(now)
-            packet = self._neutral_packet() if intent is None else self._build_packet(intent, now)
+            if intent is None:
+                packet = self._neutral_packet()
+            else:
+                packet = self._build_packet(intent, self._read_aim(now), now)
             try:
                 if self._channel is not None:
                     self._channel.send_command(packet)
@@ -220,36 +267,57 @@ class TurretController:
             rotation_p=0, elevation_p=0, arm=_ARM_OFF, fire=_FIRE_OFF, fire_duration=0,
         )
 
-    def _build_packet(self, intent: _Intent, now: float) -> rws_control.CommandPacket:
+    def _build_packet(
+        self, intent: _Intent, aim: tuple[bool, float, float], now: float
+    ) -> rws_control.CommandPacket:
         s = self._s
         speed_scale = s.speed_percent / 100.0
-
-        # --- Motion: always available, independent of the safety toggle. ---
-        rotation_direction = int(intent.right) - int(intent.left)
-        elevation_direction = int(intent.up) - int(intent.down)
-
-        rotation_v = rws_control.encode_unit_axis_to_packet_s16(
-            rotation_direction * s.rotation_v_unit * speed_scale
-        )
-        if elevation_direction > 0:
-            elevation_v = rws_control.encode_unit_axis_to_packet_s16(s.elevation_v_up_unit * speed_scale)
-        elif elevation_direction < 0:
-            elevation_v = rws_control.encode_unit_axis_to_packet_s16(-s.elevation_v_down_unit * speed_scale)
-        else:
-            elevation_v = 0
-
-        rotation_p = self._position_target(rotation_direction)
-        elevation_p = self._position_target(elevation_direction)
+        aim_active, aim_rot, aim_ele = aim
 
         # ENABLE stays on for the whole live session so the motors HOLD position
         # (a released axis must not sag/spring back). It drops only on the deadman
         # neutral packet. Fire, not motion, is what the safety gates.
         flags1 = rws_control.FLAGS1_ENABLE
         flags2 = rws_control.FLAGS2_ROTATION_V | rws_control.FLAGS2_ELEVATION_V | rws_control.FLAGS2_VEL_PRIO
-        if rotation_direction != 0:
-            flags2 |= rws_control.FLAGS2_ROTATION_P
-        if elevation_direction != 0:
-            flags2 |= rws_control.FLAGS2_ELEVATION_P
+
+        if aim_active:
+            # --- Auto-track: analog visual-servo velocities override manual WASD.
+            # Use the EXACT same packet recipe as a held manual key (velocity +
+            # a full-scale +/-pi position target + the *_P valid bits), only with
+            # a proportional velocity magnitude. Manual motion demonstrably moves
+            # the turret this way, so auto-track must command it identically — a
+            # velocity-only packet (no position target / no P bits) did not move it.
+            rotation_direction = 1 if aim_rot > 0 else (-1 if aim_rot < 0 else 0)
+            elevation_direction = 1 if aim_ele > 0 else (-1 if aim_ele < 0 else 0)
+            rotation_v = rws_control.encode_unit_axis_to_packet_s16(aim_rot * speed_scale)
+            elevation_v = rws_control.encode_unit_axis_to_packet_s16(aim_ele * speed_scale)
+            rotation_p = self._position_target(rotation_direction)
+            elevation_p = self._position_target(elevation_direction)
+            if rotation_direction != 0:
+                flags2 |= rws_control.FLAGS2_ROTATION_P
+            if elevation_direction != 0:
+                flags2 |= rws_control.FLAGS2_ELEVATION_P
+        else:
+            # --- Manual motion: always available, independent of the safety toggle.
+            rotation_direction = int(intent.right) - int(intent.left)
+            elevation_direction = int(intent.up) - int(intent.down)
+
+            rotation_v = rws_control.encode_unit_axis_to_packet_s16(
+                rotation_direction * s.rotation_v_unit * speed_scale
+            )
+            if elevation_direction > 0:
+                elevation_v = rws_control.encode_unit_axis_to_packet_s16(s.elevation_v_up_unit * speed_scale)
+            elif elevation_direction < 0:
+                elevation_v = rws_control.encode_unit_axis_to_packet_s16(-s.elevation_v_down_unit * speed_scale)
+            else:
+                elevation_v = 0
+
+            rotation_p = self._position_target(rotation_direction)
+            elevation_p = self._position_target(elevation_direction)
+            if rotation_direction != 0:
+                flags2 |= rws_control.FLAGS2_ROTATION_P
+            if elevation_direction != 0:
+                flags2 |= rws_control.FLAGS2_ELEVATION_P
 
         # --- Firing: gated by the safety toggle only. ---
         fire_active = intent.safety_off and intent.fire_held
@@ -330,11 +398,13 @@ class TurretController:
             fire_mode = self._fire_mode
             input_age_ms = int((now - self._last_input_monotonic) * 1000)
             deadman_active = now - self._last_input_monotonic > self._s.deadman_seconds
+            track_active = self._aim_active and now - self._last_aim_monotonic <= self._s.aim_timeout_seconds
         return {
             "dry_run": self._s.dry_run,
             "safety_off": intent.safety_off,
             "fire_held": intent.fire_held,
             "fire_mode": fire_mode,
+            "track_active": track_active,
             "axes": {"up": intent.up, "down": intent.down, "left": intent.left, "right": intent.right},
             "packets_sent": self._packets_sent,
             "replies_received": self._replies_received,

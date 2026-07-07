@@ -15,7 +15,7 @@ from flask import Flask
 
 from .config import load_settings
 from .routes import bp
-from .store import CrosshairStore
+from .store import AiSettingsStore, CrosshairStore
 from .turret import TurretController
 
 
@@ -34,5 +34,6 @@ def create_app() -> Flask:
     app.config["SETTINGS"] = settings
     app.config["TURRET"] = controller
     app.config["CROSSHAIR"] = CrosshairStore(settings.crosshair_file)
+    app.config["AI_SETTINGS"] = AiSettingsStore(settings.ai_settings_file)
     app.register_blueprint(bp)
     return app

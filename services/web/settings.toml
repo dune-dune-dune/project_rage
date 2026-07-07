@@ -17,6 +17,20 @@ mode = "short"        # short | medium | manual
 duration_short = 161
 duration_medium = 605
 
+# AI auto-track (key T) — closed-loop visual servo tuning. There is no camera
+# FOV calibration, so tracking drives velocity to null the target's pixel error
+# from the (possibly offset) crosshair. gain: velocity per unit normalised error;
+# deadzone: |error| below this (fraction of frame) commands zero; max_velocity:
+# cap on the normalised velocity (0..1). aim_timeout_ms: if the browser stops
+# sending track updates for longer than this, the aim velocity zeroes (fail-safe).
+# imgsz: YOLO model input size fed to the browser-side ONNX inference.
+[track]
+gain = 2.5
+deadzone = 0.02
+max_velocity = 0.5
+aim_timeout_ms = 500
+imgsz = 640
+
 # Camera switcher (TAB cycles through these). `path` is a MediaMTX path; the
 # full WHEP URL is <gateway base>/<path>/whep, where the base is derived from
 # WHEP_URL (or WHEP_BASE / VIDEO_GATEWAY_HOST_IP) in .env. Add the *_hd paths

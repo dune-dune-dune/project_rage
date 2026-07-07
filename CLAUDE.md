@@ -18,7 +18,10 @@ Weapon Station). The mature, working control path is a standalone keyboard contr
 20 Hz. A **Flask + Gunicorn web cockpit** (`services/web/`) offers a browser control path: full-screen
 WHEP video plus WASD/F/Space keys, with a background thread streaming the same 40-byte RWS UDP commands
 directly to the turret at 20 Hz (reusing `rws_control.py`, bypassing `rws_bridge`). `rws_bridge` remains
-a separate standalone driver; `video_gateway` serves the camera video.
+a separate standalone driver; `video_gateway` serves the camera video. The cockpit also has an
+**AI mode** (key `I`): browser-side YOLO detection (ONNX Runtime Web) over the live video, plus an
+**auto-track** (key `T`) that drives the turret with a proportional visual servo to centre the nearest
+target on the crosshair. Auto-track only aims — it never fires.
 
 ⚠️ **Safety-critical.** Commands go to a real turret by default (`192.168.88.56:7780`). Use
 `--dry-run` for any test without hardware. Never send `arm`/`fire` unless the task explicitly requires
@@ -44,9 +47,12 @@ project_rage/
 │   ├── rws_bridge/           # Async turret driver: WebSocket control + 20 Hz RWS loop + lease watchdog
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
-│   │   ├── app/{__init__,config,turret,routes,wsgi}.py  # factory, settings, control class, routes
-│   │   ├── app/templates/index.html + app/static/{cockpit.js,cockpit.css}  # fullscreen video + HUD
-│   │   ├── settings.toml     # control tuning (rates, axes, fire) — NOT secrets
+│   │   ├── app/{__init__,config,turret,routes,store,wsgi}.py  # factory, settings, control, routes, JSON stores
+│   │   ├── app/templates/index.html + app/static/{cockpit.js,ai.js,ai-worker.js,cockpit.css}  # video + HUD + YOLO (worker)
+│   │   ├── app/static/vendor/  # onnxruntime-web (vendored by scripts/fetch_ort.sh) — NOT committed
+│   │   ├── scripts/{export_onnx.py,fetch_ort.sh}  # one-off: best.pt→best.onnx, fetch ORT web
+│   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # YOLO weights (gitignored runtime data)
+│   │   ├── settings.toml     # control tuning (rates, axes, fire, [track] AI servo) — NOT secrets
 │   │   ├── .env.example       # network/deploy env template (user creates .env)
 │   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + video_gateway
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
@@ -99,10 +105,27 @@ python3 services/rws_bridge/src/main.py                                # bridge,
 
 **Cockpit keys:** `WASD` = momentary move (hold to move; **always available, not gated by safety**),
 `F` = safety toggle (**gates firing only**), `Space` = hold to fire, `M` = cycle fire mode
-(short/medium/manual), `Q`/`E` = digital zoom in/out, `TAB` = cycle camera. The ⚙ button (top-right)
-opens crosshair position settings (H/V offset), persisted server-side to `services/web/data/crosshair.json`
-via `/api/crosshair`. `ENABLE` stays on for the whole live session so the motors HOLD position (drops
-only on the deadman neutral packet); fire needs safety disengaged (ARMED).
+(short/medium/manual), `Q`/`E` = digital zoom in/out, `TAB` = cycle camera, `I` = cycle AI mode
+(**OFF → AI ON (YOLO) → AI CUSTOM → OFF**), `T` = toggle auto-track (any AI mode; aim-only, never fires).
+AI CUSTOM is a model-free pixel **motion** detector (frame differencing): pixels whose colour changes by
+more than the ⚙ threshold are clustered into blobs, and blobs exceeding the min-object-size are flagged as
+a drone. The ⚙ button (top-right) opens crosshair position settings (H/V offset,
+`services/web/data/crosshair.json` via `/api/crosshair`) and AI settings (confidence threshold default 70%,
+min object size in px, and Custom motion threshold %, `services/web/data/ai_settings.json` via
+`/api/ai-settings`). `ENABLE` stays on for the whole live
+session so the motors HOLD position (drops only on the deadman neutral packet); fire needs safety
+disengaged (ARMED).
+
+**AI mode + auto-track** (`app/static/ai.js` + `ai-worker.js`): detection runs in the browser via ONNX
+Runtime Web **in a Web Worker** (off the main thread, so inference never starves the input/heartbeat
+timers that keep the 20 Hz stream + 400 ms deadman alive — manual control stays smooth while AI is on).
+It reads the same `<video>` the operator sees — so it always runs on the ACTIVE camera and honours zoom.
+`T` locks the target nearest the crosshair and POSTs a normalised aim velocity to `/api/track` at ~frame
+rate; the `TurretController` overrides its velocity axes with that proportional command (visual servo —
+no FOV calibration needed, no absolute angle). The aim point is the crosshair position **including its
+programmatic offset**, computed by inverting the `object-fit: cover` + zoom mapping. First convert
+`best.pt → best.onnx` and vendor ORT once: `python scripts/export_onnx.py` + `bash scripts/fetch_ort.sh`
+(deps in `requirements-export.txt`, dev-only — the cockpit runtime stays torch-free).
 
 **TTY controller keys** (`test_rws_control.py`, [README.md](README.md)): `WASD` latch axes, arrows
 momentary move, `1`/`2`/`4`/`5` = enable/slow/reload/forceHome, `Backspace` = safetyARM, `7`/`8`/`9` =
@@ -122,7 +145,11 @@ model. In brief:
   thread streams RWS UDP at 20 Hz. Movement is always available; the F safety gates **firing only**
   (software fire interlock: `fire='F'` only when safety disengaged). 400 ms deadman, single Gunicorn
   worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. HTTP routes:
-  `/`, `/healthz`, `/api/input`, `/api/status`, `/api/crosshair` (GET/POST).
+  `/`, `/healthz`, `/api/input`, `/api/status`, `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim
+  velocity), `/api/ai-settings` (GET/POST conf + min size), `/assets/model.onnx`, `/assets/classes.json`.
+- **AI auto-track** runs client-side (`ai.js`, ONNX Runtime Web); the server only receives the resulting
+  aim velocity via `/api/track` and applies it as a velocity override (aim-only — never touches `arm`/`fire`).
+  A dedicated aim timeout (`[track].aim_timeout_ms`, default 500 ms) zeroes the aim if the browser stalls.
 
 ## Known gaps (do not assume these work)
 

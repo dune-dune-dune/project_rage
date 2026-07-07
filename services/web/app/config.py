@@ -70,8 +70,24 @@ class Settings:
     fire_duration_short: int
     fire_duration_medium: int
 
+    # --- AI auto-track tuning (settings.toml [track]) ---
+    # Proportional visual-servo gain, normalised deadzone and velocity cap, plus
+    # the aim command freshness window and the model input size fed to the
+    # browser-side YOLO (ONNX). No FOV calibration exists, so tracking is a
+    # closed-loop pixel servo — these tune its feel, not an absolute mapping.
+    track_gain: float
+    track_deadzone: float
+    track_max_velocity: float
+    aim_timeout_ms: int
+    ai_imgsz: int
+
     # --- Persistence ---
     crosshair_file: str
+    ai_settings_file: str
+    # Absolute path to the exported ONNX weights served to the browser, and the
+    # optional class-names sidecar written by the export script.
+    model_file: str
+    classes_file: str
 
     @property
     def period_seconds(self) -> float:
@@ -80,6 +96,10 @@ class Settings:
     @property
     def deadman_seconds(self) -> float:
         return self.deadman_ms / 1000.0
+
+    @property
+    def aim_timeout_seconds(self) -> float:
+        return self.aim_timeout_ms / 1000.0
 
 
 def load_env_file() -> None:
@@ -151,6 +171,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     axes = toml.get("axes", {})
     fire = toml.get("fire", {})
     video = toml.get("video", {})
+    track = toml.get("track", {})
 
     return Settings(
         src_ip=os.environ.get("RWS_SRC_IP", "192.168.88.33"),
@@ -169,10 +190,22 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         fire_mode=str(fire.get("mode", "short")),
         fire_duration_short=int(fire.get("duration_short", 161)),
         fire_duration_medium=int(fire.get("duration_medium", 605)),
-        crosshair_file=_crosshair_file(),
+        track_gain=float(track.get("gain", 2.5)),
+        track_deadzone=float(track.get("deadzone", 0.02)),
+        track_max_velocity=float(track.get("max_velocity", 0.5)),
+        aim_timeout_ms=int(track.get("aim_timeout_ms", 500)),
+        ai_imgsz=int(track.get("imgsz", 640)),
+        crosshair_file=str(_data_file("crosshair.json")),
+        ai_settings_file=str(_data_file("ai_settings.json")),
+        model_file=str(_data_file("model", "best.onnx")),
+        classes_file=str(_data_file("model", "classes.json")),
     )
 
 
-def _crosshair_file() -> str:
-    data_dir = os.environ.get("COCKPIT_DATA_DIR", "").strip() or str(_HERE.parents[1] / "data")
-    return str(Path(data_dir) / "crosshair.json")
+def _data_dir() -> Path:
+    override = os.environ.get("COCKPIT_DATA_DIR", "").strip()
+    return Path(override) if override else _HERE.parents[1] / "data"
+
+
+def _data_file(*parts: str) -> Path:
+    return _data_dir().joinpath(*parts)
