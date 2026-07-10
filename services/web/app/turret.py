@@ -125,6 +125,18 @@ class TurretController:
         self._cur_rotation_p: int | None = None
         self._cur_elevation_p: int | None = None
 
+        # Turret health/telemetry, parsed from the 32-byte status reply
+        # (distance) and the 36-byte telemetry reply (battery, motor temps and
+        # currents). None until the corresponding reply arrives. Scales per
+        # docs/protocol.md: voltage/current x0.01, battery raw/0xFFFF.
+        self._cur_distance_mm: int | None = None
+        self._bat_percent: int | None = None
+        self._bat_voltage: float | None = None
+        self._temp_x: int | None = None
+        self._temp_y: int | None = None
+        self._amp_x: float | None = None
+        self._amp_y: float | None = None
+
         # State owned exclusively by the sender thread — no lock needed for these.
         self._next_sequence = 0
         self._fire_seq = 0
@@ -271,7 +283,7 @@ class TurretController:
                             self._replies_received += 1
                             self._last_reply_monotonic = now
                             if event.data is not None:
-                                self._update_angles_from_reply(event.data)
+                                self._ingest_reply(event.data)
             except OSError:
                 log.exception("RWS send failed")
             self._packets_sent += 1
@@ -424,14 +436,20 @@ class TurretController:
         target_rad = max(-math.pi, min(math.pi, target_rad))
         return rws_control.encode_angle_rad_to_packet_s32(target_rad), True
 
-    def _update_angles_from_reply(self, data: bytes) -> None:
-        """Cache the turret's current pan/tilt angles from a 32-byte status reply.
+    def _ingest_reply(self, data: bytes) -> None:
+        """Dispatch an inbound reply to the right parser by length (32 vs 36 B).
 
-        Only the status reply carries angles; telemetry (36 B) is ignored here.
-        Each axis updates only when its validity bit is set. Not checksum-verified
-        (consistent with the rest of the reply handling — see the known gaps)."""
-        if len(data) != rws_control.RWS_STATUS_PAYLOAD_LEN:
-            return
+        Not checksum-verified (consistent with the rest of the reply handling —
+        see the known gaps)."""
+        if len(data) == rws_control.RWS_STATUS_PAYLOAD_LEN:
+            self._update_status_from_reply(data)
+        elif len(data) == rws_control.RWS_TELEMETRY_PAYLOAD_LEN:
+            self._update_telemetry_from_reply(data)
+
+    def _update_status_from_reply(self, data: bytes) -> None:
+        """Cache pan/tilt angles and rangefinder distance from the status reply.
+
+        Each angle updates only when its validity bit is set."""
         try:
             reply = rws_control.RwsReplyWire.from_bytes(data)
         except ValueError:
@@ -440,6 +458,25 @@ class TurretController:
             self._cur_rotation_p = int(reply.rotation_p)
         if reply.flags1 & rws_control.RWS_STATUS_FLAGS1_ELEVATION_P_VALID:
             self._cur_elevation_p = int(reply.elevation_p)
+        self._cur_distance_mm = int(reply.distance_mm)
+
+    def _update_telemetry_from_reply(self, data: bytes) -> None:
+        """Cache battery, motor temperatures and currents from the telemetry reply.
+
+        Scales per docs/protocol.md: voltage x0.01 V, battery raw/0xFFFF. The
+        temperature (deg C) and current scales are not documented; temperature is
+        taken as a raw int16 and current is assumed x0.01 A — adjust here if real
+        readings look off."""
+        try:
+            tele = rws_control.RwsTelemetryWire.from_bytes(data)
+        except ValueError:
+            return
+        self._bat_percent = round(tele.battery_percent / 0xFFFF * 100)
+        self._bat_voltage = round(tele.voltage_bat * 0.01, 2)
+        self._temp_x = int(tele.temperature_x)
+        self._temp_y = int(tele.temperature_y)
+        self._amp_x = round(tele.amperage_x * 0.01, 2)
+        self._amp_y = round(tele.amperage_y * 0.01, 2)
 
     def _fire_duration(self) -> int:
         mode = self._fire_mode
@@ -516,6 +553,12 @@ class TurretController:
             # arrives. Also signals whether the position-hold telemetry is live.
             "angle_rot_deg": self._angle_deg(self._cur_rotation_p),
             "angle_ele_deg": self._angle_deg(self._cur_elevation_p),
+            # Turret health/telemetry (None until the relevant reply arrives).
+            "distance_m": None if self._cur_distance_mm is None else round(self._cur_distance_mm / 1000.0, 2),
+            "battery_percent": self._bat_percent,
+            "battery_voltage": self._bat_voltage,
+            "motor_temp": {"x": self._temp_x, "y": self._temp_y},
+            "motor_current": {"x": self._amp_x, "y": self._amp_y},
         }
 
     @staticmethod

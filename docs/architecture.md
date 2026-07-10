@@ -68,8 +68,14 @@ Key properties of the cockpit's `TurretController` ([`services/web/app/turret.py
   continuously**, commands the turret's **current angle** (parsed from the 32-byte status reply,
   `_update_angles_from_reply`) when idle so it holds without drift, and leads that angle by
   `_POSITION_LEAD_RAD` (90°, clamped to ±π) in the travel direction while moving — a modest step, never a
-  `±π` jump. Until the turret reports an angle it falls back to the old `±π`/off scheme. `snapshot()`
-  exposes `angle_rot_deg`/`angle_ele_deg` so you can see whether the hold telemetry is live.
+  `±π` jump. Until the turret reports an angle it falls back to the old `±π`/off scheme.
+- **Turret telemetry.** `_ingest_reply` dispatches inbound replies by length: the 32-byte status reply
+  (`_update_status_from_reply`) yields the angles above plus `distance_mm`; the 36-byte telemetry reply
+  (`_update_telemetry_from_reply`) yields battery %, battery voltage, per-axis motor temperature and
+  current. `snapshot()` exposes them (`angle_rot_deg`/`angle_ele_deg`, `distance_m`, `battery_percent`,
+  `battery_voltage`, `motor_temp{x,y}`, `motor_current{x,y}`) and the HUD renders them as badges. Scales
+  follow docs/protocol.md (voltage ×0.01, battery raw/0xFFFF); temperature (raw °C) and current (assumed
+  ×0.01 A) scales are undocumented — adjust in `_update_telemetry_from_reply` if real readings look off.
 - **Velocity soft-start.** A secondary nicety (not the jerk fix): manual velocity is slew-rate limited,
   ramping toward the target by `accel_per_tick` each tick over `[control] ramp_ms` (default 250 ms). The
   reference ramps velocity too (see the `idle_*_idle` captures). `ramp_ms=0` disables it. Auto-track
@@ -267,7 +273,8 @@ pending hardware validation; `POST /api/input` is the active path.
 HTTP routes ([`routes.py`](../services/web/app/routes.py)): `GET /` (cockpit page), `GET /healthz`,
 `GET`/`POST /login`, `GET /logout`,
 `POST /api/input` (JSON intent incl. `speed_level` → controller, 204; active control path), `GET /api/status` (HUD snapshot,
-incl. `track_active`, `speed_level`, `speed_levels`), `GET`/`POST /api/crosshair`,
+incl. `track_active`, `speed_level`, `speed_levels`, and turret telemetry: `angle_rot_deg`/`angle_ele_deg`,
+`distance_m`, `battery_percent`/`battery_voltage`, `motor_temp`, `motor_current`), `GET`/`POST /api/crosshair`,
 `POST /api/track` (auto-aim velocity → controller, 204),
 `GET`/`POST /api/ai-settings` (conf, min size, Custom motion threshold, ego-motion max shift),
 `GET /assets/model.onnx` (exported weights),

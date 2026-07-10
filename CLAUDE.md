@@ -116,7 +116,10 @@ more than the ⚙ threshold are clustered into blobs, and blobs exceeding the mi
 a drone. The ⚙ button (top-right) opens crosshair position settings (H/V offset,
 `services/web/data/crosshair.json` via `/api/crosshair`) and AI settings (confidence threshold default 70%,
 min object size in px, and Custom motion threshold %, `services/web/data/ai_settings.json` via
-`/api/ai-settings`). `ENABLE` stays on for the whole live
+`/api/ai-settings`). The HUD also shows **turret telemetry badges** parsed from the reply stream —
+azimuth/elevation (`AZ/EL`), battery (`BAT` %+V, pulses red under 15%), motor temps (`MOT` X/Y),
+motor currents (`CUR` X/Y) and rangefinder distance (`DIST`); each dims until its reply arrives.
+`ENABLE` stays on for the whole live
 session so the motors HOLD position (drops only on the deadman neutral packet); fire needs safety
 disengaged (ARMED).
 

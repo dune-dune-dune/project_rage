@@ -134,9 +134,9 @@ html, body {
 .badge.dry { background: #7a5c00; }
 .badge.ai-on { background: #1c6ea4; }
 .badge.track-on { background: #b3261e; animation: pulse 1s infinite; }
-/* Angle badge with no turret telemetry yet (angles null). */
+/* Telemetry badge with no turret data yet (values null). */
 .badge.stale { opacity: 0.45; }
-#angles { font-variant-numeric: tabular-nums; }
+#angles, #battery, #motemp, #mocur, #dist { font-variant-numeric: tabular-nums; }
 
 @keyframes pulse { 50% { opacity: 0.55; } }
 
