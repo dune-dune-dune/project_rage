@@ -47,14 +47,14 @@ project_rage/
 │   ├── rws_bridge/           # Async turret driver: WebSocket control + 20 Hz RWS loop + lease watchdog
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
-│   │   ├── app/{__init__,config,turret,routes,store,wsgi}.py  # factory, settings, control, routes, JSON stores
+│   │   ├── app/{__init__,config,turret,routes,ws,store,wsgi}.py  # factory, settings, control, routes, /api/ws, JSON stores
 │   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,cockpit.css}  # video + HUD + YOLO (worker) + PIN login
 │   │   ├── app/static/vendor/  # onnxruntime-web (vendored by scripts/fetch_ort.sh) — NOT committed
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh}  # one-off: best.pt→best.onnx, fetch ORT web
-│   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, timing, turret, auth, routes)
+│   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws)
 │   │   ├── requirements-dev.txt  # pytest (dev-only; runtime stays torch/pytest-free)
 │   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # YOLO weights (gitignored runtime data)
-│   │   ├── settings.toml     # control tuning (rates, axes, fire, speed_levels, [track] AI servo) — NOT secrets
+│   │   ├── settings.toml     # control tuning (rates, ramp_ms, axes, fire, speed_levels, [track] AI servo) — NOT secrets
 │   │   ├── .env.example       # network/deploy env template incl. COCKPIT_PIN/SECRET_KEY (user creates .env)
 │   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + video_gateway
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
@@ -165,9 +165,22 @@ model. In brief:
   worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. A 7-digit-PIN
   login gate (`COCKPIT_PIN` in `.env`) protects all routes except `/healthz`/`/login`/static.
   Rotation speed is switchable at runtime with keys `1`/`2` (`speed_level` on `/api/input`, levels from
-  `[control] speed_levels`). HTTP routes: `/`, `/healthz`, `/login` (GET/POST), `/logout`, `/api/input`,
-  `/api/status`, `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
-  `/api/ai-settings` (GET/POST conf + min size), `/assets/model.onnx`, `/assets/classes.json`.
+  `[control] speed_levels`). The one-time **jerk at movement start** was traced to the position channel:
+  the cockpit used to toggle the `ROT_P`/`ELE_P` valid bits off→on and jump the target 0→±π on the first
+  move packet. It now mirrors the reference — **P valid bits stay on continuously**, holding the turret's
+  *current* angle (read from status replies) when idle and leading it by a modest amount
+  (`_POSITION_LEAD_RAD`, 90°) when moving (`turret.py:_axis_position`); until the turret reports an angle
+  it falls back to the old ±π scheme. A separate **velocity soft-start** ramp (`[control] ramp_ms`,
+  default 250 ms) smooths the 0→full velocity step (auto-track bypasses it) — a nicety, not the jerk fix.
+  **Control input transport:** the browser sends intent via `POST /api/input` (reliable default). A
+  WebSocket path **`/api/ws`** (flask-sock) exists server-side but is **OFF by default** on the client
+  (`USE_WS=false` in `cockpit.js`) pending real-hardware validation — a half-open WS can report
+  `readyState===OPEN` while dropping frames, black-holing the heartbeat and tripping the deadman. HTTP
+  routes: `/`, `/healthz`, `/login` (GET/POST), `/logout`, `/api/input`, `/api/status`,
+  `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
+  `/api/ai-settings` (GET/POST conf + min size), `/assets/model.onnx`, `/assets/classes.json`;
+  WebSocket route: `/api/ws` (control input). The PIN gate is registered app-wide
+  (`before_app_request`) so it also protects `/api/ws`.
 - **AI auto-track** runs client-side (`ai.js`, ONNX Runtime Web); the server only receives the resulting
   aim velocity via `/api/track` and applies it as a velocity override (aim-only — never touches `arm`/`fire`).
   A dedicated aim timeout (`[track].aim_timeout_ms`, default 500 ms) zeroes the aim if the browser stalls.

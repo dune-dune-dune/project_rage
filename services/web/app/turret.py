@@ -32,10 +32,19 @@ except ModuleNotFoundError:  # local runs: add the repo root to the path.
 
 log = logging.getLogger("cockpit.turret")
 
-# Position targets mirror the reference motion model: a held axis commands a
-# full-scale +/-pi position target while velocity drives the actual motion.
+# Legacy full-scale position targets, used only as a fallback until the turret
+# has reported its current angle (see _axis_position).
 _POSITIVE_TARGET_RAD = math.pi
 _NEGATIVE_TARGET_RAD = -math.pi
+
+# Modest directional lead (radians) added to the *current* angle to form the
+# position target while an axis is moving. The reference controller keeps the
+# position-valid bits set continuously and commands a target a small step ahead
+# of the current angle (never a full +/-pi jump) — that is what avoids the
+# one-time kick when the P-valid bit rises and the target jumps to +/-pi. The
+# lead is refreshed from telemetry each tick, so the turret chases a carrot that
+# stays this far ahead while VEL_PRIO drives the actual speed.
+_POSITION_LEAD_RAD = math.pi / 2
 
 _ARM_ON = b"A\x00\x00\x00"
 _ARM_OFF = b"\x00\x00\x00\x00"
@@ -74,6 +83,13 @@ def _clamp_unit(value: object) -> float:
     return max(-1.0, min(1.0, number))
 
 
+def _approach(current: float, target: float, step: float) -> float:
+    """Move ``current`` toward ``target`` by at most ``step`` (slew-rate limit)."""
+    if step <= 0.0 or abs(target - current) <= step:
+        return target
+    return current + step if target > current else current - step
+
+
 class TurretController:
     def __init__(self, settings: Settings) -> None:
         self._s = settings
@@ -94,6 +110,20 @@ class TurretController:
         self._aim_rot = 0.0
         self._aim_ele = 0.0
         self._last_aim_monotonic = 0.0
+
+        # Ramped (soft-start) commanded velocities in normalised units, slewed
+        # toward the manual target each tick to avoid a 0->full step — that step
+        # is what makes the turret jerk once on movement start. Owned by the
+        # sender thread. Auto-track bypasses the ramp (see _build_packet).
+        self._cmd_rot_v = 0.0
+        self._cmd_ele_v = 0.0
+
+        # Latest turret-reported angles (raw int32, +/-pi scale), parsed from the
+        # 32-byte status replies. None until the first valid reply. Used as the
+        # idle position target so the P-valid bits can stay on continuously
+        # (matching the reference) without the turret drifting.
+        self._cur_rotation_p: int | None = None
+        self._cur_elevation_p: int | None = None
 
         # State owned exclusively by the sender thread — no lock needed for these.
         self._next_sequence = 0
@@ -240,6 +270,8 @@ class TurretController:
                         if event.kind == "reply":
                             self._replies_received += 1
                             self._last_reply_monotonic = now
+                            if event.data is not None:
+                                self._update_angles_from_reply(event.data)
             except OSError:
                 log.exception("RWS send failed")
             self._packets_sent += 1
@@ -269,6 +301,9 @@ class TurretController:
     def _neutral_packet(self) -> rws_control.CommandPacket:
         """Fully inert packet (motors off, disarmed) used when the deadman fires."""
         self._fire_was_active = False
+        # Reset the ramp so control resumes with a fresh soft-start from zero.
+        self._cmd_rot_v = 0.0
+        self._cmd_ele_v = 0.0
         return self._make_packet(
             flags1=0, flags2=0, rotation_v=0, elevation_v=0,
             rotation_p=0, elevation_p=0, arm=_ARM_OFF, fire=_FIRE_OFF, fire_duration=0,
@@ -298,38 +333,47 @@ class TurretController:
             # velocity-only packet (no position target / no P bits) did not move it.
             rotation_direction = 1 if aim_rot > 0 else (-1 if aim_rot < 0 else 0)
             elevation_direction = 1 if aim_ele > 0 else (-1 if aim_ele < 0 else 0)
-            rotation_v = rws_control.encode_unit_axis_to_packet_s16(aim_rot * speed_scale)
-            elevation_v = rws_control.encode_unit_axis_to_packet_s16(aim_ele * speed_scale)
-            rotation_p = self._position_target(rotation_direction)
-            elevation_p = self._position_target(elevation_direction)
-            if rotation_direction != 0:
+            # Auto-track velocities come from a closed-loop visual servo and are
+            # already smooth, so they bypass the ramp. Keep the ramp state in sync
+            # with what we actually command so a later aim->manual handoff resumes
+            # from the current velocity instead of stepping.
+            self._cmd_rot_v = aim_rot * speed_scale
+            self._cmd_ele_v = aim_ele * speed_scale
+            rotation_v = rws_control.encode_unit_axis_to_packet_s16(self._cmd_rot_v)
+            elevation_v = rws_control.encode_unit_axis_to_packet_s16(self._cmd_ele_v)
+            rotation_p, rot_p_valid = self._axis_position(rotation_direction, self._cur_rotation_p)
+            elevation_p, ele_p_valid = self._axis_position(elevation_direction, self._cur_elevation_p)
+            if rot_p_valid:
                 flags2 |= rws_control.FLAGS2_ROTATION_P
-            if elevation_direction != 0:
+            if ele_p_valid:
                 flags2 |= rws_control.FLAGS2_ELEVATION_P
         else:
             # --- Manual motion: always available, independent of the safety toggle.
             rotation_direction = int(intent.right) - int(intent.left)
             elevation_direction = int(intent.up) - int(intent.down)
 
-            rotation_v = rws_control.encode_unit_axis_to_packet_s16(
-                rotation_direction * s.rotation_v_unit * speed_scale * level_scale
-            )
+            # Target normalised velocities (pre-encode). The ramp slews the actual
+            # commanded velocity toward these each tick so movement starts smoothly
+            # instead of stepping 0->full (the cause of the one-time start jerk).
+            target_rot_v = rotation_direction * s.rotation_v_unit * speed_scale * level_scale
             if elevation_direction > 0:
-                elevation_v = rws_control.encode_unit_axis_to_packet_s16(
-                    s.elevation_v_up_unit * speed_scale * level_scale
-                )
+                target_ele_v = s.elevation_v_up_unit * speed_scale * level_scale
             elif elevation_direction < 0:
-                elevation_v = rws_control.encode_unit_axis_to_packet_s16(
-                    -s.elevation_v_down_unit * speed_scale * level_scale
-                )
+                target_ele_v = -s.elevation_v_down_unit * speed_scale * level_scale
             else:
-                elevation_v = 0
+                target_ele_v = 0.0
 
-            rotation_p = self._position_target(rotation_direction)
-            elevation_p = self._position_target(elevation_direction)
-            if rotation_direction != 0:
+            step = s.accel_per_tick
+            self._cmd_rot_v = _approach(self._cmd_rot_v, target_rot_v, step)
+            self._cmd_ele_v = _approach(self._cmd_ele_v, target_ele_v, step)
+            rotation_v = rws_control.encode_unit_axis_to_packet_s16(self._cmd_rot_v)
+            elevation_v = rws_control.encode_unit_axis_to_packet_s16(self._cmd_ele_v)
+
+            rotation_p, rot_p_valid = self._axis_position(rotation_direction, self._cur_rotation_p)
+            elevation_p, ele_p_valid = self._axis_position(elevation_direction, self._cur_elevation_p)
+            if rot_p_valid:
                 flags2 |= rws_control.FLAGS2_ROTATION_P
-            if elevation_direction != 0:
+            if ele_p_valid:
                 flags2 |= rws_control.FLAGS2_ELEVATION_P
 
         # --- Firing: gated by the safety toggle only. ---
@@ -359,6 +403,43 @@ class TurretController:
         if direction < 0:
             return rws_control.encode_angle_rad_to_packet_s32(_NEGATIVE_TARGET_RAD)
         return 0
+
+    def _axis_position(self, direction: int, current: int | None) -> tuple[int, bool]:
+        """Return (position_target_int32, p_valid) for one axis.
+
+        Reference-faithful: keep the position-valid bit **on continuously** and
+        command the *current* angle when idle (so the turret holds without the
+        P-valid bit toggling), leading it by ``_POSITION_LEAD_RAD`` in the travel
+        direction while moving (a modest step, never a 0->+/-pi jump). This removes
+        the P-valid rising edge + far-target jump that kicks the turret once on
+        movement start. Until the turret reports an angle, fall back to the old
+        scheme (P valid only while moving, +/-pi target).
+        """
+        if current is None:
+            if direction == 0:
+                return 0, False
+            return self._position_target(direction), True
+        current_rad = rws_control.decode_packet_angle_s32_to_rad(current)
+        target_rad = current_rad + direction * _POSITION_LEAD_RAD
+        target_rad = max(-math.pi, min(math.pi, target_rad))
+        return rws_control.encode_angle_rad_to_packet_s32(target_rad), True
+
+    def _update_angles_from_reply(self, data: bytes) -> None:
+        """Cache the turret's current pan/tilt angles from a 32-byte status reply.
+
+        Only the status reply carries angles; telemetry (36 B) is ignored here.
+        Each axis updates only when its validity bit is set. Not checksum-verified
+        (consistent with the rest of the reply handling — see the known gaps)."""
+        if len(data) != rws_control.RWS_STATUS_PAYLOAD_LEN:
+            return
+        try:
+            reply = rws_control.RwsReplyWire.from_bytes(data)
+        except ValueError:
+            return
+        if reply.flags1 & rws_control.RWS_STATUS_FLAGS1_ROTATION_P_VALID:
+            self._cur_rotation_p = int(reply.rotation_p)
+        if reply.flags1 & rws_control.RWS_STATUS_FLAGS1_ELEVATION_P_VALID:
+            self._cur_elevation_p = int(reply.elevation_p)
 
     def _fire_duration(self) -> int:
         mode = self._fire_mode
@@ -431,7 +512,17 @@ class TurretController:
             "send_rate_hz": self._s.send_rate_hz,
             "link": self._link_state(now),
             "bind_error": self._bind_error,
+            # Turret-reported angles (deg), or None until a valid status reply
+            # arrives. Also signals whether the position-hold telemetry is live.
+            "angle_rot_deg": self._angle_deg(self._cur_rotation_p),
+            "angle_ele_deg": self._angle_deg(self._cur_elevation_p),
         }
+
+    @staticmethod
+    def _angle_deg(raw: int | None) -> float | None:
+        if raw is None:
+            return None
+        return round(math.degrees(rws_control.decode_packet_angle_s32_to_rad(raw)), 1)
 
     def speed_config(self) -> dict:
         """Rotation-speed levels for the client HUD: percents + current level."""

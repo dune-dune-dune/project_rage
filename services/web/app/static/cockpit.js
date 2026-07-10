@@ -32,7 +32,17 @@ function cycleFireMode() {
   dirty = true;
 }
 
-function sendInput() {
+// Control input transport. POST /api/input is the reliable default. The
+// WebSocket path (/api/ws) is kept but OFF by default: a half-open socket can
+// report readyState===OPEN while silently dropping frames, which black-holes the
+// heartbeat, trips the 400 ms deadman and makes the turret clunk (ENABLE drops on
+// every neutral packet). Re-enable only after validating it on real hardware.
+const USE_WS = false;
+let ws = null;
+let wsReady = false;
+let wsRetryMs = 500; // reconnect backoff, grows to a cap
+
+function sendInputPost() {
   fetch("/api/input", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -40,6 +50,49 @@ function sendInput() {
     keepalive: true,
   }).catch(() => {});
 }
+
+function sendInput() {
+  // Prefer the open WebSocket only when explicitly enabled; else always POST.
+  if (USE_WS && wsReady && ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify(intent));
+      return;
+    } catch (_) {
+      /* fall through to POST on a transient send error */
+    }
+  }
+  sendInputPost();
+}
+
+function connectWs() {
+  const url = window.location.origin.replace(/^http/, "ws") + "/api/ws";
+  try {
+    ws = new WebSocket(url);
+  } catch (_) {
+    scheduleWsReconnect();
+    return;
+  }
+  ws.addEventListener("open", () => {
+    wsReady = true;
+    wsRetryMs = 500; // reset backoff on a good connection
+    sendInput(); // push current intent immediately on (re)connect
+  });
+  ws.addEventListener("close", () => {
+    wsReady = false;
+    scheduleWsReconnect();
+  });
+  ws.addEventListener("error", () => {
+    // 'close' fires after 'error' and drives the reconnect; nothing to do here.
+    wsReady = false;
+  });
+}
+
+function scheduleWsReconnect() {
+  setTimeout(connectWs, wsRetryMs);
+  wsRetryMs = Math.min(wsRetryMs * 2, 5000); // exponential backoff, capped at 5 s
+}
+
+if (USE_WS) connectWs();
 
 document.addEventListener("keydown", (e) => {
   if (e.target instanceof HTMLInputElement) return; // don't hijack the sliders
@@ -102,6 +155,7 @@ window.addEventListener("blur", () => {
 });
 
 // Push on change and as a heartbeat so the backend deadman knows we are alive.
+// sendInput() routes over the WebSocket when open, else POST (see above).
 setInterval(() => {
   if (dirty) {
     dirty = false;

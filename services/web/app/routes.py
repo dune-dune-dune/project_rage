@@ -24,9 +24,13 @@ bp = Blueprint("cockpit", __name__)
 _PUBLIC_ENDPOINTS = {"cockpit.login", "cockpit.login_post", "cockpit.healthz", "static"}
 
 
-@bp.before_request
+@bp.before_app_request
 def require_auth():
     """Gate every request behind the PIN login when COCKPIT_PIN is configured.
+
+    Registered app-wide (``before_app_request``, not blueprint-scoped) so it also
+    covers the flask-sock ``/api/ws`` route, which is attached to the app rather
+    than this blueprint — a blueprint ``before_request`` would leave it unguarded.
 
     No PIN configured -> the gate is disabled (open access). Otherwise an
     authenticated session passes; public endpoints (login page, health, static)

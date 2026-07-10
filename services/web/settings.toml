@@ -4,6 +4,7 @@
 [control]
 send_rate_hz = 20        # command stream cadence (20 Hz = 50 ms period)
 deadman_ms = 400         # no fresh browser input for longer than this -> neutral
+ramp_ms = 250            # soft-start: ms to ramp a manual axis 0 -> full; 0 disables
 speed_percent = 100      # global speed scale, 10..100
 # Rotation-speed levels (percent) selectable with keys 1..N. Multiplies manual
 # motion velocity; the last level is the default (fastest). Auto-track ignores it.
@@ -11,9 +12,9 @@ speed_levels = [50, 100]
 
 [axes]
 # Normalised velocity amplitudes (0..1) per axis.
-rotation_v_unit = 0.5
-elevation_v_up_unit = 0.5
-elevation_v_down_unit = 0.5
+rotation_v_unit = 0.8
+elevation_v_up_unit = 0.8
+elevation_v_down_unit = 0.8
 
 [fire]
 mode = "short"        # short | medium | manual

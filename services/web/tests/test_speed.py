@@ -6,11 +6,17 @@ import time
 
 
 def _rotation_v(controller, level):
-    """Build a 'holding right' packet at the given speed level and read rotation_v."""
+    """Read the steady-state rotation_v for 'holding right' at a speed level.
+
+    Runs enough ticks to let the soft-start ramp reach saturation, so the value
+    reflects the level's full velocity rather than an intermediate ramp step.
+    """
     controller.apply_input({"right": True, "speed_level": level})
     now = time.monotonic()
     intent = controller._read_intent(now)
-    packet = controller._build_packet(intent, (False, 0.0, 0.0), now)
+    packet = None
+    for _ in range(20):  # >> ticks needed to ramp 0 -> full at any level
+        packet = controller._build_packet(intent, (False, 0.0, 0.0), now)
     return packet.rotation_v
 
 

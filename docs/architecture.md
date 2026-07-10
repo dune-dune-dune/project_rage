@@ -40,8 +40,10 @@ reusing `rws_control.py` — it does **not** go through `rws_bridge`:
 ```
 Browser (WASD momentary / 1-2 speed level / F=safety toggle / Space=hold-fire)
   → on change + ~150 ms heartbeat → POST /api/input {up,down,left,right,safety,fire,fire_mode,speed_level}
+      (a WebSocket /api/ws path exists with the same payload/handler but is OFF by default — USE_WS in cockpit.js)
   → Flask updates lock-guarded intent + deadman timestamp
   → background sender thread @ 20 Hz → build_generated_command_packet()
+      (manual velocity soft-started via a per-axis ramp: 0→full over ramp_ms, no start jerk)
   → RwsControlChannel → 40-byte RWS UDP → turret 192.168.88.56:7780
 turret replies (32/36 B) → poll_events (drained; HUD reads /api/status)
 ```
@@ -58,6 +60,28 @@ Key properties of the cockpit's `TurretController` ([`services/web/app/turret.py
   fire additionally requires `fire_held` (`fire='F'` iff `safety_off and fire_held`) — a web-layer
   interlock the wire protocol itself lacks (see Safety caveats).
 - **Fire mode (M).** `short`/`medium`/`manual` selects `fire_duration` (161/605/0), cycled at runtime.
+- **Position-hold (start-jerk fix).** The one-time jerk at movement start came from the *position*
+  channel, not velocity. The cockpit used to keep the `ROT_P`/`ELE_P` valid bits **off** at idle and
+  flip them **on** while jumping the target `0 → ±π` on the first move packet — that rising edge +
+  far-target jump kicks the turret once before `VEL_PRIO` settles. It now mirrors the reference (whose
+  `flags2` is a constant `0x3f` across idle and motion): `_axis_position` keeps the P valid bits **on
+  continuously**, commands the turret's **current angle** (parsed from the 32-byte status reply,
+  `_update_angles_from_reply`) when idle so it holds without drift, and leads that angle by
+  `_POSITION_LEAD_RAD` (90°, clamped to ±π) in the travel direction while moving — a modest step, never a
+  `±π` jump. Until the turret reports an angle it falls back to the old `±π`/off scheme. `snapshot()`
+  exposes `angle_rot_deg`/`angle_ele_deg` so you can see whether the hold telemetry is live.
+- **Velocity soft-start.** A secondary nicety (not the jerk fix): manual velocity is slew-rate limited,
+  ramping toward the target by `accel_per_tick` each tick over `[control] ramp_ms` (default 250 ms). The
+  reference ramps velocity too (see the `idle_*_idle` captures). `ramp_ms=0` disables it. Auto-track
+  bypasses the ramp but keeps its state in sync so an aim→manual handoff does not step. State resets to 0
+  on the deadman neutral packet.
+- **Control transport.** Operator intent is sent via `POST /api/input` (the reliable default). A
+  WebSocket **`/api/ws`** (flask-sock, same Flask app / port / single worker) is implemented but **OFF by
+  default** in the client (`USE_WS=false` in `cockpit.js`): a half-open WS can report `readyState===OPEN`
+  while silently dropping frames, black-holing the heartbeat → deadman flap → ENABLE-drop clunk each
+  cycle. It needs real-hardware validation before enabling. Both paths call the same `apply_input`, so
+  the 20 Hz loop/deadman are transport-agnostic. The PIN gate is app-wide (`before_app_request`), so it
+  guards `/api/ws` too.
 - **Deadman.** If no browser input arrives for `deadman_ms` (default 400 ms), the sender forces neutral.
 - **Dry-run.** `RWS_DRY_RUN=true` (default) never opens the socket; packets are built and logged only.
 - **Crosshair.** An adjustable aiming crosshair (⚙ panel) is persisted to `data/crosshair.json` via
@@ -95,7 +119,7 @@ black letterbox + `getImageData` — the *exact* pixel path of the proven main-t
 quality is preserved) and transfers the raw RGBA buffer (zero-copy) to the worker, which only builds the
 tensor, runs ONNX inference, decodes and NMSes. This split is deliberate: single-threaded WASM inference
 blocks its thread for 100–300 ms/frame, and on the *main* thread that would starve the `setInterval` timers
-sending `/api/input` + the heartbeat, tripping the 400 ms deadman and making manual control jerk or die.
+streaming control input (WebSocket `/api/ws`) + the heartbeat, tripping the 400 ms deadman and making manual control jerk or die.
 Off-thread, manual control stays smooth while AI is on. Only one frame is in flight at a time (`busy` gate),
 which throttles submission to the worker's actual inference rate. The auto-track command is DECOUPLED from
 the detection rate: detection only updates a target velocity, and a fixed 10 Hz timer re-POSTs it — so the
@@ -214,14 +238,17 @@ Deployment/network/secrets come from `.env` (see [`.env.example`](../services/we
 
 Control **tuning** lives separately in [`settings.toml`](../services/web/settings.toml) (read via
 stdlib `tomllib`, mounted read-only into the container so it can be edited without a rebuild):
-`[control]` send_rate_hz (20), deadman_ms (400), speed_percent (100), `speed_levels` (percent list
+`[control]` send_rate_hz (20), deadman_ms (400), ramp_ms (250, velocity soft-start; 0 disables),
+speed_percent (100), `speed_levels` (percent list
 selectable with keys 1..N, default `[50, 100]`); `[axes]` rotation/elevation unit
 amplitudes; `[fire]` mode + short/medium durations; `[track]` AI visual-servo `gain` (2.5), `deadzone`
 (0.02), `max_velocity` (0.5), `aim_timeout_ms` (500), `imgsz` (640, must match the ONNX export).
 
-**Authentication:** a `before_request` gate (`routes.py`) protects the cockpit when `COCKPIT_PIN`
-(7 digits) is set — unauthenticated page requests redirect to `/login`, `/api`+`/assets` get `401`;
-`/healthz`, `/login` and static assets are public. `POST /login` compares the PIN with
+**Authentication:** an app-wide `before_app_request` gate (`routes.py`) protects the cockpit when
+`COCKPIT_PIN` (7 digits) is set — unauthenticated page requests redirect to `/login`, `/api`+`/assets`
+get `401`; `/healthz`, `/login` and static assets are public. It is registered `before_app_request`
+(not blueprint-scoped) specifically so it also gates the flask-sock `/api/ws` route, which is attached
+to the app rather than the blueprint. `POST /login` compares the PIN with
 `hmac.compare_digest` and sets a signed session (secret = `SECRET_KEY`). Empty `COCKPIT_PIN` = open access.
 
 **Rotation-speed levels:** keys `1`/`2` post `speed_level` on `/api/input`; the controller multiplies
@@ -233,9 +260,13 @@ manual-motion velocity by `speed_levels[level-1]/100` (auto-track is unaffected 
 pre-decoded stream is visible. `video_gateway` keeps the H264 transcodes warm (`runOnDemandCloseAfter:
 60s`).
 
+WebSocket route ([`ws.py`](../services/web/app/ws.py)): `/api/ws` — an alternative control-input channel
+(flask-sock) that feeds the same `apply_input`. **Disabled by default** on the client (`USE_WS=false`)
+pending hardware validation; `POST /api/input` is the active path.
+
 HTTP routes ([`routes.py`](../services/web/app/routes.py)): `GET /` (cockpit page), `GET /healthz`,
 `GET`/`POST /login`, `GET /logout`,
-`POST /api/input` (JSON intent incl. `speed_level` → controller, 204), `GET /api/status` (HUD snapshot,
+`POST /api/input` (JSON intent incl. `speed_level` → controller, 204; active control path), `GET /api/status` (HUD snapshot,
 incl. `track_active`, `speed_level`, `speed_levels`), `GET`/`POST /api/crosshair`,
 `POST /api/track` (auto-aim velocity → controller, 204),
 `GET`/`POST /api/ai-settings` (conf, min size, Custom motion threshold, ego-motion max shift),

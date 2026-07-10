@@ -62,6 +62,9 @@ class Settings:
     # --- Control tuning (settings.toml) ---
     send_rate_hz: int
     deadman_ms: int
+    # Velocity soft-start: time (ms) to ramp a manual axis from 0 to full scale.
+    # Removes the one-time jerk at movement start. 0 disables the ramp (instant).
+    ramp_ms: int
     speed_percent: int
     # Discrete rotation-speed levels (percent) selectable with keys 1..N. Each is
     # a multiplier applied to the manual-motion velocity; the last level is the
@@ -106,6 +109,17 @@ class Settings:
     @property
     def deadman_seconds(self) -> float:
         return self.deadman_ms / 1000.0
+
+    @property
+    def accel_per_tick(self) -> float:
+        """Max normalised velocity change per send tick for the soft-start ramp.
+
+        Reaching full scale (1.0) takes ``ramp_ms``. ``ramp_ms <= 0`` yields 1.0,
+        i.e. a full-scale step in one tick (ramp disabled, original behaviour).
+        """
+        if self.ramp_ms <= 0:
+            return 1.0
+        return self.period_seconds / (self.ramp_ms / 1000.0)
 
     @property
     def aim_timeout_seconds(self) -> float:
@@ -212,6 +226,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         cameras=_build_cameras(video),
         send_rate_hz=int(control.get("send_rate_hz", 20)),
         deadman_ms=int(control.get("deadman_ms", 400)),
+        ramp_ms=int(control.get("ramp_ms", 250)),
         speed_percent=int(control.get("speed_percent", 100)),
         speed_levels=_parse_speed_levels(control.get("speed_levels", [50, 100])),
         rotation_v_unit=float(axes.get("rotation_v_unit", 0.5)),
