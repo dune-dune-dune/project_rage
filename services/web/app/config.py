@@ -63,6 +63,10 @@ class Settings:
     send_rate_hz: int
     deadman_ms: int
     speed_percent: int
+    # Discrete rotation-speed levels (percent) selectable with keys 1..N. Each is
+    # a multiplier applied to the manual-motion velocity; the last level is the
+    # default (fastest). See TurretController._build_packet.
+    speed_levels: tuple[float, ...]
     rotation_v_unit: float
     elevation_v_up_unit: float
     elevation_v_down_unit: float
@@ -80,6 +84,12 @@ class Settings:
     track_max_velocity: float
     aim_timeout_ms: int
     ai_imgsz: int
+
+    # --- Auth ---
+    # 7-digit login PIN and the Flask session secret, both from .env. When ``pin``
+    # is empty the login gate is disabled and the cockpit is served openly.
+    pin: str
+    secret_key: str
 
     # --- Persistence ---
     crosshair_file: str
@@ -116,6 +126,25 @@ def load_env_file() -> None:
     except ModuleNotFoundError:
         return
     load_dotenv(env_path, override=False)
+
+
+def _parse_speed_levels(raw: object) -> tuple[float, ...]:
+    """Coerce the [control] speed_levels list into clamped percent multipliers.
+
+    Each entry is clamped to 10..100. Falls back to (50.0, 100.0) when the value
+    is missing, not a list, or yields no valid entries.
+    """
+    default = (50.0, 100.0)
+    if not isinstance(raw, (list, tuple)):
+        return default
+    levels: list[float] = []
+    for item in raw:
+        try:
+            value = float(item)
+        except (TypeError, ValueError):
+            continue
+        levels.append(max(10.0, min(100.0, value)))
+    return tuple(levels) if levels else default
 
 
 def _load_salt() -> bytes:
@@ -184,6 +213,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         send_rate_hz=int(control.get("send_rate_hz", 20)),
         deadman_ms=int(control.get("deadman_ms", 400)),
         speed_percent=int(control.get("speed_percent", 100)),
+        speed_levels=_parse_speed_levels(control.get("speed_levels", [50, 100])),
         rotation_v_unit=float(axes.get("rotation_v_unit", 0.5)),
         elevation_v_up_unit=float(axes.get("elevation_v_up_unit", 0.5)),
         elevation_v_down_unit=float(axes.get("elevation_v_down_unit", 0.5)),
@@ -195,6 +225,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         track_max_velocity=float(track.get("max_velocity", 0.5)),
         aim_timeout_ms=int(track.get("aim_timeout_ms", 500)),
         ai_imgsz=int(track.get("imgsz", 640)),
+        pin=os.environ.get("COCKPIT_PIN", "").strip(),
+        secret_key=os.environ.get("SECRET_KEY", "").strip(),
         crosshair_file=str(_data_file("crosshair.json")),
         ai_settings_file=str(_data_file("ai_settings.json")),
         model_file=str(_data_file("model", "best.onnx")),

@@ -38,8 +38,8 @@ The **web cockpit control path** (`services/web/`, Flask + Gunicorn) drives the 
 reusing `rws_control.py` — it does **not** go through `rws_bridge`:
 
 ```
-Browser (WASD momentary / F=safety toggle / Space=hold-fire)
-  → on change + ~150 ms heartbeat → POST /api/input {up,down,left,right,safety,fire}
+Browser (WASD momentary / 1-2 speed level / F=safety toggle / Space=hold-fire)
+  → on change + ~150 ms heartbeat → POST /api/input {up,down,left,right,safety,fire,fire_mode,speed_level}
   → Flask updates lock-guarded intent + deadman timestamp
   → background sender thread @ 20 Hz → build_generated_command_packet()
   → RwsControlChannel → 40-byte RWS UDP → turret 192.168.88.56:7780
@@ -207,18 +207,37 @@ Deployment/network/secrets come from `.env` (see [`.env.example`](../services/we
 | Gunicorn bind | `WEB_BIND` | `0.0.0.0:8000` |
 | Gunicorn workers / threads | `GUNICORN_WORKERS` / `GUNICORN_THREADS` | `1` / `8` |
 | Log level | `LOG_LEVEL` | `info` |
+| Login PIN (7 digits) | `COCKPIT_PIN` | empty → login disabled (open) |
+| Session secret | `SECRET_KEY` | empty → ephemeral key (sessions reset on restart) |
 | Video WHEP URL | `WHEP_URL` | (optional) |
 | Video gateway host IP | `VIDEO_GATEWAY_HOST_IP` | (optional) |
 
 Control **tuning** lives separately in [`settings.toml`](../services/web/settings.toml) (read via
 stdlib `tomllib`, mounted read-only into the container so it can be edited without a rebuild):
-`[control]` send_rate_hz (20), deadman_ms (400), speed_percent (100); `[axes]` rotation/elevation unit
+`[control]` send_rate_hz (20), deadman_ms (400), speed_percent (100), `speed_levels` (percent list
+selectable with keys 1..N, default `[50, 100]`); `[axes]` rotation/elevation unit
 amplitudes; `[fire]` mode + short/medium durations; `[track]` AI visual-servo `gain` (2.5), `deadzone`
 (0.02), `max_velocity` (0.5), `aim_timeout_ms` (500), `imgsz` (640, must match the ONNX export).
 
+**Authentication:** a `before_request` gate (`routes.py`) protects the cockpit when `COCKPIT_PIN`
+(7 digits) is set — unauthenticated page requests redirect to `/login`, `/api`+`/assets` get `401`;
+`/healthz`, `/login` and static assets are public. `POST /login` compares the PIN with
+`hmac.compare_digest` and sets a signed session (secret = `SECRET_KEY`). Empty `COCKPIT_PIN` = open access.
+
+**Rotation-speed levels:** keys `1`/`2` post `speed_level` on `/api/input`; the controller multiplies
+manual-motion velocity by `speed_levels[level-1]/100` (auto-track is unaffected — it has its own
+`max_velocity` cap). Default level = the last (fastest), preserving prior behaviour.
+
+**Instant camera switching:** the client pre-connects a persistent `RTCPeerConnection` + its own
+`<video>` per camera at load (STUN dropped — LAN candidates are local); `TAB` only flips which
+pre-decoded stream is visible. `video_gateway` keeps the H264 transcodes warm (`runOnDemandCloseAfter:
+60s`).
+
 HTTP routes ([`routes.py`](../services/web/app/routes.py)): `GET /` (cockpit page), `GET /healthz`,
-`POST /api/input` (JSON intent → controller, 204), `GET /api/status` (HUD snapshot, now incl.
-`track_active`), `GET`/`POST /api/crosshair`, `POST /api/track` (auto-aim velocity → controller, 204),
+`GET`/`POST /login`, `GET /logout`,
+`POST /api/input` (JSON intent incl. `speed_level` → controller, 204), `GET /api/status` (HUD snapshot,
+incl. `track_active`, `speed_level`, `speed_levels`), `GET`/`POST /api/crosshair`,
+`POST /api/track` (auto-aim velocity → controller, 204),
 `GET`/`POST /api/ai-settings` (conf, min size, Custom motion threshold, ego-motion max shift),
 `GET /assets/model.onnx` (exported weights),
 `GET /assets/classes.json` (class names).

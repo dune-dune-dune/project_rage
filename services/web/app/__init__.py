@@ -18,6 +18,8 @@ from .routes import bp
 from .store import AiSettingsStore, CrosshairStore
 from .turret import TurretController
 
+log = logging.getLogger("cockpit")
+
 
 def create_app() -> Flask:
     logging.basicConfig(
@@ -27,6 +29,19 @@ def create_app() -> Flask:
 
     app = Flask(__name__)
     settings = load_settings()
+
+    # Session secret for the PIN login. A stable SECRET_KEY (from .env) keeps
+    # sessions valid across restarts; without it we fall back to an ephemeral key
+    # so login still works this run but every session drops on restart.
+    if settings.secret_key:
+        app.secret_key = settings.secret_key
+    else:
+        app.secret_key = os.urandom(32)
+        if settings.pin:
+            log.warning("SECRET_KEY not set: login sessions will reset on restart")
+    if not settings.pin:
+        log.warning("COCKPIT_PIN not set: the cockpit is served WITHOUT authentication")
+
     controller = TurretController(settings)
     controller.start()
     atexit.register(controller.stop)

@@ -10,7 +10,8 @@ html, body {
   color: #e8f0f2;
 }
 
-#video {
+#video,
+.cam-video {
   position: fixed;
   inset: 0;
   width: 100vw;
@@ -19,6 +20,12 @@ html, body {
   background: #000;
   transform-origin: center center; /* digital zoom scales from the centre */
 }
+
+/* One <video> per camera is pre-connected and stacked; only the active one is
+   visible. Kept laid out (not display:none) so its size is available to ai.js
+   and switching is an instant visibility flip. */
+.cam-video { visibility: hidden; }
+.cam-video.active { visibility: visible; }
 
 /* YOLO detection overlay. Covers the viewport; boxes are drawn in viewport
    pixels with the digital zoom baked into the math (no CSS transform here), so

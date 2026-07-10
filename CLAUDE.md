@@ -48,12 +48,14 @@ project_rage/
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
 │   │   ├── app/{__init__,config,turret,routes,store,wsgi}.py  # factory, settings, control, routes, JSON stores
-│   │   ├── app/templates/index.html + app/static/{cockpit.js,ai.js,ai-worker.js,cockpit.css}  # video + HUD + YOLO (worker)
+│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,cockpit.css}  # video + HUD + YOLO (worker) + PIN login
 │   │   ├── app/static/vendor/  # onnxruntime-web (vendored by scripts/fetch_ort.sh) — NOT committed
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh}  # one-off: best.pt→best.onnx, fetch ORT web
+│   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, timing, turret, auth, routes)
+│   │   ├── requirements-dev.txt  # pytest (dev-only; runtime stays torch/pytest-free)
 │   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # YOLO weights (gitignored runtime data)
-│   │   ├── settings.toml     # control tuning (rates, axes, fire, [track] AI servo) — NOT secrets
-│   │   ├── .env.example       # network/deploy env template (user creates .env)
+│   │   ├── settings.toml     # control tuning (rates, axes, fire, speed_levels, [track] AI servo) — NOT secrets
+│   │   ├── .env.example       # network/deploy env template incl. COCKPIT_PIN/SECRET_KEY (user creates .env)
 │   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + video_gateway
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
 └── research/
@@ -104,7 +106,9 @@ python3 services/rws_bridge/src/main.py                                # bridge,
 ```
 
 **Cockpit keys:** `WASD` = momentary move (hold to move; **always available, not gated by safety**),
-`F` = safety toggle (**gates firing only**), `Space` = hold to fire, `M` = cycle fire mode
+`1`/`2` = rotation-speed level (client-side velocity multiplier from `[control] speed_levels`,
+default = fastest; auto-track is unaffected), `F` = safety toggle (**gates firing only**),
+`Space` = hold to fire, `M` = cycle fire mode
 (short/medium/manual), `Q`/`E` = digital zoom in/out, `TAB` = cycle camera, `I` = cycle AI mode
 (**OFF → AI ON (YOLO) → AI CUSTOM → OFF**), `T` = toggle auto-track (any AI mode; aim-only, never fires).
 AI CUSTOM is a model-free pixel **motion** detector (frame differencing): pixels whose colour changes by
@@ -115,6 +119,20 @@ min object size in px, and Custom motion threshold %, `services/web/data/ai_sett
 `/api/ai-settings`). `ENABLE` stays on for the whole live
 session so the motors HOLD position (drops only on the deadman neutral packet); fire needs safety
 disengaged (ARMED).
+
+**Login (PIN):** if `COCKPIT_PIN` (7 digits) is set in `.env`, a `before_request` gate protects the
+whole cockpit — everything except `/healthz`, `/login` and static assets redirects unauthenticated
+page requests to `/login` and returns `401` for `/api`/`/assets`. `GET/POST /login` renders/validates a
+minimal PIN page (`app/templates/login.html`; constant-time `hmac.compare_digest`), `GET /logout` clears
+the session. Sessions are signed with `SECRET_KEY` from `.env` (set a stable value so they survive
+restarts; otherwise an ephemeral key is used and a warning is logged). **Empty `COCKPIT_PIN` disables the
+gate** (open access) — a warning is logged.
+
+**Camera switching (instant):** the cockpit pre-connects a persistent `RTCPeerConnection` + its own
+`<video>` for **every** camera at load; `TAB` only flips which pre-decoded stream is visible (no
+renegotiation, no ffmpeg cold start, no ICE wait). STUN is dropped (LAN — host candidates are local).
+`video_gateway`'s H264 transcodes stay warm via `runOnDemandCloseAfter: 60s`. `window.cockpit.videoEl` is
+a getter returning the active camera's element so `ai.js` always reads the visible video.
 
 **AI mode + auto-track** (`app/static/ai.js` + `ai-worker.js`): detection runs in the browser via ONNX
 Runtime Web **in a Web Worker** (off the main thread, so inference never starves the input/heartbeat
@@ -144,9 +162,12 @@ model. In brief:
 - **web cockpit** (`services/web/`): Flask serves the page; a single `TurretController` background
   thread streams RWS UDP at 20 Hz. Movement is always available; the F safety gates **firing only**
   (software fire interlock: `fire='F'` only when safety disengaged). 400 ms deadman, single Gunicorn
-  worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. HTTP routes:
-  `/`, `/healthz`, `/api/input`, `/api/status`, `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim
-  velocity), `/api/ai-settings` (GET/POST conf + min size), `/assets/model.onnx`, `/assets/classes.json`.
+  worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. A 7-digit-PIN
+  login gate (`COCKPIT_PIN` in `.env`) protects all routes except `/healthz`/`/login`/static.
+  Rotation speed is switchable at runtime with keys `1`/`2` (`speed_level` on `/api/input`, levels from
+  `[control] speed_levels`). HTTP routes: `/`, `/healthz`, `/login` (GET/POST), `/logout`, `/api/input`,
+  `/api/status`, `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
+  `/api/ai-settings` (GET/POST conf + min size), `/assets/model.onnx`, `/assets/classes.json`.
 - **AI auto-track** runs client-side (`ai.js`, ONNX Runtime Web); the server only receives the resulting
   aim velocity via `/api/track` and applies it as a velocity override (aim-only — never touches `arm`/`fire`).
   A dedicated aim timeout (`[track].aim_timeout_ms`, default 500 ms) zeroes the aim if the browser stalls.
@@ -178,6 +199,7 @@ This list is a summary — the full, detailed gaps + safety caveats live in
 - **Root `compose.yaml` has only `video_gateway`** (Compose project `autoantibug`, containers prefixed
   `autoantibug-…`). The web cockpit has its own `services/web/docker-compose.yml` (project `rws_cockpit`).
   `rws_bridge` runs on the host directly.
-- **Testing:** prefer `--dry-run` and `--packet-limit`. There is no automated test suite despite the
-  `pytest` permission entries in `.claude/settings.local.json`.
+- **Testing:** the web cockpit has a pytest suite in `services/web/tests/`
+  (`cd services/web && pip install -r requirements-dev.txt && python3 -m pytest`). For the turret/TTY
+  paths prefer `--dry-run` and `--packet-limit`.
 - **Never commit or push unless the user asks.**

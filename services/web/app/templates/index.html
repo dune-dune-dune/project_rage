@@ -62,6 +62,7 @@
       <span id="safety" class="badge safe">SAFE</span>
       {% if dry_run %}<span class="badge dry">DRY-RUN</span>{% endif %}
       <span id="firemode" class="badge">FIRE —</span>
+      <span id="speed" class="badge">SPD —</span>
       <span id="zoom" class="badge">1.0×</span>
       <span id="turret" class="badge">TURRET —</span>
       <span id="camera" class="badge">CAM —</span>
@@ -77,7 +78,7 @@
       <span class="key" data-k="fire">SPACE</span>
     </div>
     <div class="hud-row hint">
-      W/A/S/D — рух · F — запобіжник · Space — постріл · M — режим · Q/E — зум · TAB — камера · I — ШІ · T — трек
+      W/A/S/D — рух · 1/2 — швидкість · F — запобіжник · Space — постріл · M — режим · Q/E — зум · TAB — камера · I — ШІ · T — трек
     </div>
   </div>
 
@@ -85,6 +86,7 @@
     window.__CAMERAS__ = {{ cameras | tojson }};
     window.__CROSSHAIR__ = {{ crosshair | tojson }};
     window.__FIRE_MODE__ = {{ fire_mode | tojson }};
+    window.__SPEED__ = {{ speed | tojson }};
     window.__AI__ = {{ ai | tojson }};
   </script>
   <!-- ONNX Runtime Web is imported inside ai-worker.js (off the main thread). -->

@@ -63,7 +63,10 @@ paths:
       -pix_fmt yuv420p -g 15 -bf 0 -force_key_frames expr:gte(t,n_forced*0.5) -an
       -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
     runOnDemandRestart: yes
-    runOnDemandCloseAfter: 10s
+    # Keep the transcode warm briefly after the last viewer so a page reload /
+    # brief reconnect does not pay another ffmpeg cold start. The cockpit
+    # pre-connects every camera, so both stay warm while a tab is open.
+    runOnDemandCloseAfter: 60s
 
   cam96_h264:
     runOnDemand: >
@@ -73,7 +76,7 @@ paths:
       -pix_fmt yuv420p -g 15 -bf 0 -force_key_frames expr:gte(t,n_forced*0.5) -an
       -f rtsp -rtsp_transport tcp rtsp://localhost:$RTSP_PORT/$MTX_PATH
     runOnDemandRestart: yes
-    runOnDemandCloseAfter: 10s
+    runOnDemandCloseAfter: 60s
 
   cam95_h264_hd:
     runOnDemand: >

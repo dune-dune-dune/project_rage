@@ -4,10 +4,16 @@
 // Held-key intent. W/A/S/D are momentary (held = moving); F toggles the safety
 // (which only gates firing); Space is hold-to-fire; M cycles the fire mode.
 const FIRE_MODES = ["short", "medium", "manual"];
+// Rotation-speed levels (percent) selectable with keys 1..N; server-provided.
+const SPEED =
+  window.__SPEED__ && Array.isArray(window.__SPEED__.levels) && window.__SPEED__.levels.length
+    ? window.__SPEED__
+    : { levels: [50, 100], current: 2 };
 const intent = {
   up: false, down: false, left: false, right: false,
   safety: false, fire: false,
   fire_mode: FIRE_MODES.includes(window.__FIRE_MODE__) ? window.__FIRE_MODE__ : "short",
+  speed_level: SPEED.current,
 };
 
 const KEY_TO_AXIS = {
@@ -57,6 +63,17 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.code === "KeyQ") { zoomBy(+ZOOM_STEP); e.preventDefault(); return; }
   if (e.code === "KeyE") { zoomBy(-ZOOM_STEP); e.preventDefault(); return; }
+  // Number keys 1..N pick the rotation-speed level (top row and numpad).
+  const digit = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
+  if (digit) {
+    const n = parseInt(digit[1], 10);
+    if (n >= 1 && n <= SPEED.levels.length) {
+      intent.speed_level = n;
+      dirty = true;
+      e.preventDefault();
+    }
+    return;
+  }
   // I toggles AI (YOLO) mode; T toggles auto-track (only meaningful in AI mode).
   if (e.code === "KeyI") { if (window.AI) window.AI.toggle(); e.preventDefault(); return; }
   if (e.code === "KeyT") { if (window.AI) window.AI.toggleTrack(); e.preventDefault(); return; }
@@ -98,6 +115,7 @@ const safetyEl = document.getElementById("safety");
 const linkEl = document.getElementById("link");
 const turretEl = document.getElementById("turret");
 const fireModeEl = document.getElementById("firemode");
+const speedEl = document.getElementById("speed");
 const zoomEl = document.getElementById("zoom");
 const keyEls = {};
 document.querySelectorAll(".key").forEach((el) => (keyEls[el.dataset.k] = el));
@@ -107,6 +125,9 @@ function paintKeys() {
     el.classList.toggle("active", !!intent[k]);
   }
   fireModeEl.textContent = "FIRE " + intent.fire_mode.toUpperCase();
+  speedEl.textContent =
+    "SPD " + intent.speed_level + "/" + SPEED.levels.length +
+    " · " + SPEED.levels[intent.speed_level - 1] + "%";
   zoomEl.textContent = zoom.toFixed(1) + "×";
 }
 
@@ -144,12 +165,16 @@ setInterval(() => {
 // Q/E scale the video element (client-side crop). Persisted in localStorage.
 const ZOOM_STEP = 0.2, ZOOM_MIN = 1.0, ZOOM_MAX = 4.0;
 let zoom = clampZoom(parseFloat(localStorage.getItem("cockpit.zoom")));
+// One <video> per camera (populated by the WHEP block below). Declared here so
+// applyZoom can scale them; empty on the first call, filled once cameras load.
+let videoEls = [];
 
 function clampZoom(z) {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number.isFinite(z) ? z : 1.0));
 }
 function applyZoom() {
-  document.getElementById("video").style.transform = "scale(" + zoom + ")";
+  const t = "scale(" + zoom + ")";
+  videoEls.forEach((v) => (v.style.transform = t));
 }
 function zoomBy(delta) {
   zoom = clampZoom(zoom + delta);
@@ -197,48 +222,60 @@ settingsBtn.addEventListener("click", () => { settingsPanel.hidden = !settingsPa
 applyCrosshair();
 
 // -------------------------------------------------------------- WHEP video
-// Minimal WHEP (WebRTC-HTTP Egress Protocol) client for MediaMTX, with a
-// TAB camera switcher that tears down and reconnects the peer connection.
+// Minimal WHEP (WebRTC-HTTP Egress Protocol) client for MediaMTX. To make TAB
+// switching INSTANT, every camera gets its own <video> and a persistent
+// RTCPeerConnection established up front; TAB only flips which pre-decoded
+// stream is visible — no renegotiation, no ffmpeg cold start, no ICE wait.
 const cameraEl = document.getElementById("camera");
 const cameras = Array.isArray(window.__CAMERAS__) ? window.__CAMERAS__ : [];
-const videoEl = document.getElementById("video");
 let camIndex = 0;
-let currentPc = null;
-let switchToken = 0; // guards against overlapping async switches
+
+// Build one <video> per camera, reusing the static #video for the first.
+const baseVideo = document.getElementById("video");
+for (let i = 0; i < Math.max(cameras.length, 1); i++) {
+  let v = baseVideo;
+  if (i > 0) {
+    v = document.createElement("video");
+    v.autoplay = true;
+    v.muted = true;
+    v.playsInline = true;
+    baseVideo.parentNode.insertBefore(v, baseVideo.nextSibling);
+  }
+  v.classList.add("cam-video");
+  videoEls.push(v);
+}
+
+function activeVideo() {
+  return videoEls[camIndex];
+}
+
+function setActiveCamera(index) {
+  camIndex = index;
+  videoEls.forEach((v, i) => v.classList.toggle("active", i === index));
+  const cam = cameras[index];
+  cameraEl.textContent = (cam && cam.label) || "CAM —";
+  applyZoom();
+}
 
 async function connectCamera(index) {
   const cam = cameras[index];
-  const token = ++switchToken;
-
-  if (currentPc) {
-    try { currentPc.close(); } catch (_) {}
-    currentPc = null;
-  }
+  const videoEl = videoEls[index];
   if (!cam) {
-    linkEl.textContent = "NO VIDEO URL";
-    cameraEl.textContent = "CAM —";
+    if (index === camIndex) linkEl.textContent = "NO VIDEO URL";
     return;
   }
-  cameraEl.textContent = cam.label || "CAM";
-  linkEl.textContent = "VIDEO …";
-
-  const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-  });
-  currentPc = pc;
+  // No STUN: LAN deployment, host candidates are local so ICE completes at once.
+  const pc = new RTCPeerConnection({});
   pc.addTransceiver("video", { direction: "recvonly" });
-  pc.ontrack = (ev) => {
-    if (token === switchToken) videoEl.srcObject = ev.streams[0];
-  };
+  pc.ontrack = (ev) => { videoEl.srcObject = ev.streams[0]; };
   pc.onconnectionstatechange = () => {
-    if (pc === currentPc) linkEl.textContent = "VIDEO " + pc.connectionState.toUpperCase();
+    if (index === camIndex) linkEl.textContent = "VIDEO " + pc.connectionState.toUpperCase();
   };
 
   try {
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     await waitIceGathering(pc);
-    if (token !== switchToken) return; // superseded by a newer switch
     const res = await fetch(cam.url, {
       method: "POST",
       headers: { "Content-Type": "application/sdp" },
@@ -246,18 +283,16 @@ async function connectCamera(index) {
     });
     if (!res.ok) throw new Error("WHEP " + res.status);
     const answer = await res.text();
-    if (token !== switchToken) return;
     await pc.setRemoteDescription({ type: "answer", sdp: answer });
   } catch (err) {
-    if (token === switchToken) linkEl.textContent = "NO SIGNAL";
+    if (index === camIndex) linkEl.textContent = "NO SIGNAL";
     console.error("WHEP failed", err);
   }
 }
 
 function nextCamera() {
   if (cameras.length < 2) return;
-  camIndex = (camIndex + 1) % cameras.length;
-  connectCamera(camIndex);
+  setActiveCamera((camIndex + 1) % cameras.length);
   // The AI overlay/tracker must drop any locked target on a camera change.
   if (window.AI && window.AI.onCameraSwitch) window.AI.onCameraSwitch();
 }
@@ -276,16 +311,22 @@ function waitIceGathering(pc) {
   });
 }
 
-connectCamera(camIndex);
+// Show the first camera and pre-connect ALL of them so switching is instant.
+setActiveCamera(0);
+if (cameras.length) {
+  cameras.forEach((_, i) => connectCamera(i));
+} else {
+  linkEl.textContent = "NO VIDEO URL";
+}
 
 // ------------------------------------------------------- shared state for ai.js
 // Live getters so ai.js always reads the CURRENT crosshair offset (percent of
-// viewport from centre), digital zoom and active camera when mapping detections
-// and computing the aim error. Exposed rather than duplicated to keep one source
-// of truth.
+// viewport from centre), digital zoom and ACTIVE camera <video> when mapping
+// detections and computing the aim error. Exposed rather than duplicated to keep
+// one source of truth.
 window.cockpit = {
   get cross() { return cross; },     // {x, y} percent of viewport from centre
-  get zoom() { return zoom; },       // digital zoom scale applied to #video
+  get zoom() { return zoom; },       // digital zoom scale applied to the videos
   get camIndex() { return camIndex; },
-  videoEl,
+  get videoEl() { return activeVideo(); },
 };

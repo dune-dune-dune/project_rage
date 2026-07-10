@@ -1,0 +1,3 @@
+# Dev/test-only deps. The runtime (requirements.txt) stays free of these.
+-r requirements.txt
+pytest>=8.0

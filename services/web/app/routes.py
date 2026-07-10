@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 
 from flask import (
@@ -9,13 +10,38 @@ from flask import (
     abort,
     current_app,
     jsonify,
+    redirect,
     render_template,
     request,
     send_file,
+    session,
     url_for,
 )
 
 bp = Blueprint("cockpit", __name__)
+
+# Endpoints reachable without a valid session when the PIN gate is enabled.
+_PUBLIC_ENDPOINTS = {"cockpit.login", "cockpit.login_post", "cockpit.healthz", "static"}
+
+
+@bp.before_request
+def require_auth():
+    """Gate every request behind the PIN login when COCKPIT_PIN is configured.
+
+    No PIN configured -> the gate is disabled (open access). Otherwise an
+    authenticated session passes; public endpoints (login page, health, static)
+    pass; API/asset requests get a 401; page requests redirect to /login.
+    """
+    settings = current_app.config["SETTINGS"]
+    if not settings.pin:
+        return None
+    if session.get("authed"):
+        return None
+    if request.endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    if request.path.startswith("/api") or request.path.startswith("/assets"):
+        abort(401)
+    return redirect(url_for("cockpit.login"))
 
 
 def _controller():
@@ -80,6 +106,7 @@ def index():
         dry_run=settings.dry_run,
         crosshair=_crosshair().load(),
         fire_mode=_controller().snapshot()["fire_mode"],
+        speed=_controller().speed_config(),
         ai=_ai_config(settings),
         asset_version=_asset_version(),
     )
@@ -88,6 +115,33 @@ def index():
 @bp.get("/healthz")
 def healthz():
     return jsonify(status="ok")
+
+
+@bp.get("/login")
+def login():
+    settings = current_app.config["SETTINGS"]
+    if not settings.pin or session.get("authed"):
+        return redirect(url_for("cockpit.index"))
+    return render_template("login.html", error=None)
+
+
+@bp.post("/login")
+def login_post():
+    settings = current_app.config["SETTINGS"]
+    if not settings.pin:
+        return redirect(url_for("cockpit.index"))
+    pin = (request.form.get("pin") or "").strip()
+    if hmac.compare_digest(pin, settings.pin):
+        session["authed"] = True
+        session.permanent = True
+        return redirect(url_for("cockpit.index"))
+    return render_template("login.html", error="Невірний PIN"), 401
+
+
+@bp.get("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("cockpit.login"))
 
 
 @bp.post("/api/input")

@@ -80,6 +80,10 @@ class TurretController:
         self._lock = threading.Lock()
         self._intent = _Intent()
         self._fire_mode = settings.fire_mode if settings.fire_mode in _FIRE_MODES else "short"
+        # Rotation-speed level as a 0-based index into settings.speed_levels.
+        # Defaults to the last (fastest) level so behaviour is unchanged until the
+        # operator picks a slower level with keys 1..N.
+        self._speed_index = len(settings.speed_levels) - 1
         self._last_input_monotonic = 0.0
 
         # --- Auto-track (visual servo) aim override, set from POST /api/track. ---
@@ -171,6 +175,9 @@ class TurretController:
             mode = payload.get("fire_mode")
             if mode in _FIRE_MODES:
                 self._fire_mode = mode
+            level = payload.get("speed_level")
+            if isinstance(level, int) and not isinstance(level, bool) and 1 <= level <= len(self._s.speed_levels):
+                self._speed_index = level - 1
             self._last_input_monotonic = time.monotonic()
 
     def apply_track(self, payload: dict) -> None:
@@ -272,6 +279,8 @@ class TurretController:
     ) -> rws_control.CommandPacket:
         s = self._s
         speed_scale = s.speed_percent / 100.0
+        # Selected rotation-speed level (keys 1..N) scales manual motion only.
+        level_scale = s.speed_levels[self._speed_index] / 100.0
         aim_active, aim_rot, aim_ele = aim
 
         # ENABLE stays on for the whole live session so the motors HOLD position
@@ -303,12 +312,16 @@ class TurretController:
             elevation_direction = int(intent.up) - int(intent.down)
 
             rotation_v = rws_control.encode_unit_axis_to_packet_s16(
-                rotation_direction * s.rotation_v_unit * speed_scale
+                rotation_direction * s.rotation_v_unit * speed_scale * level_scale
             )
             if elevation_direction > 0:
-                elevation_v = rws_control.encode_unit_axis_to_packet_s16(s.elevation_v_up_unit * speed_scale)
+                elevation_v = rws_control.encode_unit_axis_to_packet_s16(
+                    s.elevation_v_up_unit * speed_scale * level_scale
+                )
             elif elevation_direction < 0:
-                elevation_v = rws_control.encode_unit_axis_to_packet_s16(-s.elevation_v_down_unit * speed_scale)
+                elevation_v = rws_control.encode_unit_axis_to_packet_s16(
+                    -s.elevation_v_down_unit * speed_scale * level_scale
+                )
             else:
                 elevation_v = 0
 
@@ -396,6 +409,7 @@ class TurretController:
         with self._lock:
             intent = self._intent
             fire_mode = self._fire_mode
+            speed_index = self._speed_index
             input_age_ms = int((now - self._last_input_monotonic) * 1000)
             deadman_active = now - self._last_input_monotonic > self._s.deadman_seconds
             track_active = self._aim_active and now - self._last_aim_monotonic <= self._s.aim_timeout_seconds
@@ -404,6 +418,8 @@ class TurretController:
             "safety_off": intent.safety_off,
             "fire_held": intent.fire_held,
             "fire_mode": fire_mode,
+            "speed_level": speed_index + 1,
+            "speed_levels": len(self._s.speed_levels),
             "track_active": track_active,
             "axes": {"up": intent.up, "down": intent.down, "left": intent.left, "right": intent.right},
             "packets_sent": self._packets_sent,
@@ -416,3 +432,9 @@ class TurretController:
             "link": self._link_state(now),
             "bind_error": self._bind_error,
         }
+
+    def speed_config(self) -> dict:
+        """Rotation-speed levels for the client HUD: percents + current level."""
+        with self._lock:
+            current = self._speed_index + 1
+        return {"levels": list(self._s.speed_levels), "current": current}
