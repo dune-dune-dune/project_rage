@@ -168,6 +168,7 @@ setInterval(sendInput, 150); // heartbeat
 const safetyEl = document.getElementById("safety");
 const linkEl = document.getElementById("link");
 const turretEl = document.getElementById("turret");
+const anglesEl = document.getElementById("angles");
 const fireModeEl = document.getElementById("firemode");
 const speedEl = document.getElementById("speed");
 const zoomEl = document.getElementById("zoom");
@@ -208,6 +209,12 @@ async function pollStatus() {
       turretEl.textContent = "TURRET " + link;
       turretEl.className = "badge " + (link === "ONLINE" ? "safe" : "armed");
     }
+    // Turret-reported angles (azimuth / elevation). null until a valid reply.
+    const az = s.angle_rot_deg;
+    const el = s.angle_ele_deg;
+    const fmt = (v) => (typeof v === "number" ? v.toFixed(1) + "°" : "—");
+    anglesEl.textContent = "AZ " + fmt(az) + " EL " + fmt(el);
+    anglesEl.classList.toggle("stale", az === null && el === null);
   } catch (_) {}
 }
 setInterval(() => {
