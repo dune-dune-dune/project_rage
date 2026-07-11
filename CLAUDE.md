@@ -116,9 +116,14 @@ more than the ⚙ threshold are clustered into blobs, and blobs exceeding the mi
 a drone. The ⚙ button (top-right) opens crosshair position settings (H/V offset,
 `services/web/data/crosshair.json` via `/api/crosshair`) and AI settings (confidence threshold default 70%,
 min object size in px, and Custom motion threshold %, `services/web/data/ai_settings.json` via
-`/api/ai-settings`). The HUD also shows **turret telemetry badges** parsed from the reply stream —
-azimuth/elevation (`AZ/EL`), battery (`BAT` %+V, pulses red under 15%), motor temps (`MOT` X/Y),
-motor currents (`CUR` X/Y) and rangefinder distance (`DIST`); each dims until its reply arrives.
+`/api/ai-settings`). A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
+bottom edge, styled in `cockpit.css`) shows **turret telemetry** parsed from the reply stream, each metric
+as an SVG icon + label + value: azimuth/elevation (`AZ/EL`), battery (%+V, whole item pulses red under
+15%), motor temps (`MOT` X/Y), motor currents (`CUR` X/Y) and rangefinder distance (`DIST`); each dims
+(`.stale`) until its reply arrives. The bar is an opaque overlay over the video's bottom edge (the video
+stays full-size behind it, so crosshair/AI aim geometry is untouched); `#hud` sits just above it. The
+`#hud` overlay (bottom-left) keeps the state badges (`SAFE`/`FIRE`/`SPD`/`ZOOM`/`TURRET`/`CAM`/`LINK`/
+`AI`/`TRACK`), the WASD/Space keys and the key-legend hint.
 `ENABLE` stays on for the whole live
 session so the motors HOLD position (drops only on the deadman neutral packet); fire needs safety
 disengaged (ARMED).

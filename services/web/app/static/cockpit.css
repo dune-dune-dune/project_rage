@@ -104,10 +104,45 @@ html, body {
 }
 #settings-panel button:hover { background: rgba(255, 255, 255, 0.18); }
 
+/* Full-width instrument bar (turret telemetry) pinned to the bottom edge.
+   Opaque, so it reads as a separate instrument panel; the video stays full-size
+   behind it (crosshair / AI aim geometry unchanged). Non-interactive overlay. */
+#telemetry-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 15; /* above crosshair (5), below settings UI (20) */
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: #0b1116;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  pointer-events: none;
+  user-select: none;
+}
+
+.tele { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tele-ico { width: 26px; height: 26px; color: #e8f0f2; flex: none; }
+.tele-txt { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.tele-label { font-size: 10px; letter-spacing: 0.08em; opacity: 0.6; white-space: nowrap; }
+.tele-val {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+/* JS toggles .stale / .armed on the value span; :has() lets the whole item
+   (icon + text) dim or pulse together without changing the JS logic. */
+.tele:has(.tele-val.stale) { opacity: 0.4; }
+.tele:has(.tele-val.armed) { color: #ff5b52; animation: pulse 1s infinite; } /* low battery */
+
 #hud {
   position: fixed;
   left: 16px;
-  bottom: 16px;
+  bottom: 76px; /* clear the telemetry bar below */
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -136,7 +171,6 @@ html, body {
 .badge.track-on { background: #b3261e; animation: pulse 1s infinite; }
 /* Telemetry badge with no turret data yet (values null). */
 .badge.stale { opacity: 0.45; }
-#angles, #battery, #motemp, #mocur, #dist { font-variant-numeric: tabular-nums; }
 
 @keyframes pulse { 50% { opacity: 0.55; } }
 

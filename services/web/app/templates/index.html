@@ -56,6 +56,73 @@
       діапазон пошуку зсуву фону при повороті турелі (0 = вимкнено).</div>
   </div>
 
+  <!-- Full-width instrument bar (turret telemetry). Opaque overlay across the
+       bottom edge; the video stays full-size behind it so crosshair / AI aim
+       geometry is untouched. Values are written by pollStatus() in cockpit.js —
+       the element IDs below must stay in sync with it. Icons use currentColor +
+       thin strokes, matching the crosshair SVG convention. -->
+  <div id="telemetry-bar" aria-hidden="true">
+    <div class="tele">
+      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 12 L15.5 8.5" />
+        <path d="M8.5 15.5 L12 12" />
+        <circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" />
+        <path d="M12 3 L12 5 M12 19 L12 21 M3 12 L5 12 M19 12 L21 12" />
+      </svg>
+      <div class="tele-txt">
+        <span class="tele-label">АЗИМУТ / КУТ</span>
+        <span id="angles" class="tele-val" title="Поточний кут турелі (азимут / елевація)">— / —</span>
+      </div>
+    </div>
+
+    <div class="tele">
+      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="7" width="15" height="10" rx="2" />
+        <path d="M21 10.5 L21 13.5" />
+        <path d="M6 10 L6 14 M9 10 L9 14 M12 10 L12 14" />
+      </svg>
+      <div class="tele-txt">
+        <span class="tele-label">БАТАРЕЯ</span>
+        <span id="battery" class="tele-val" title="Заряд і напруга батареї">—</span>
+      </div>
+    </div>
+
+    <div class="tele">
+      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 4.5 a2.5 2.5 0 0 1 2.5 2.5 v6.7 a4 4 0 1 1 -5 0 V7 a2.5 2.5 0 0 1 2.5 -2.5 Z" />
+        <path d="M12 9 L12 15.5" />
+        <circle cx="12" cy="17" r="1.6" fill="currentColor" stroke="none" />
+      </svg>
+      <div class="tele-txt">
+        <span class="tele-label">ТЕМП. МОТОРІВ</span>
+        <span id="motemp" class="tele-val" title="Температура моторів X / Y">—</span>
+      </div>
+    </div>
+
+    <div class="tele">
+      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 3 L5 13 h6 l-2 8 8-10 h-6 z" />
+      </svg>
+      <div class="tele-txt">
+        <span class="tele-label">СТРУМ МОТОРІВ</span>
+        <span id="mocur" class="tele-val" title="Струм моторів X / Y">—</span>
+      </div>
+    </div>
+
+    <div class="tele">
+      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="8" />
+        <circle cx="12" cy="12" r="3" />
+        <path d="M12 1 L12 4 M12 20 L12 23 M1 12 L4 12 M20 12 L23 12" />
+      </svg>
+      <div class="tele-txt">
+        <span class="tele-label">ДАЛЕКОМІР</span>
+        <span id="dist" class="tele-val" title="Дальність лазерного далекоміра">—</span>
+      </div>
+    </div>
+  </div>
+
   <!-- Heads-up overlay. -->
   <div id="hud">
     <div class="hud-row">
@@ -65,11 +132,6 @@
       <span id="speed" class="badge">SPD —</span>
       <span id="zoom" class="badge">1.0×</span>
       <span id="turret" class="badge">TURRET —</span>
-      <span id="angles" class="badge" title="Поточний кут турелі (азимут / елевація)">AZ — EL —</span>
-      <span id="battery" class="badge" title="Заряд і напруга батареї">BAT —</span>
-      <span id="motemp" class="badge" title="Температура моторів X / Y">MOT —</span>
-      <span id="mocur" class="badge" title="Струм моторів X / Y">CUR —</span>
-      <span id="dist" class="badge" title="Дальність лазерного далекоміра">DIST —</span>
       <span id="camera" class="badge">CAM —</span>
       <span id="link" class="badge">NO VIDEO</span>
       <span id="ai" class="badge">AI OFF</span>

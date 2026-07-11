@@ -217,7 +217,7 @@ async function pollStatus() {
     const az = s.angle_rot_deg;
     const el = s.angle_ele_deg;
     const fmt = (v) => (typeof v === "number" ? v.toFixed(1) + "°" : "—");
-    anglesEl.textContent = "AZ " + fmt(az) + " EL " + fmt(el);
+    anglesEl.textContent = fmt(az) + " / " + fmt(el);
     anglesEl.classList.toggle("stale", az === null && el === null);
 
     // Turret health telemetry (battery / motor temps & currents / rangefinder).
@@ -230,17 +230,17 @@ async function pollStatus() {
     };
     const bat = s.battery_percent, batV = s.battery_voltage;
     batteryEl.textContent =
-      "BAT " + num(bat, "%", 0) + (typeof batV === "number" ? " " + batV.toFixed(1) + "V" : "");
+      num(bat, "%", 0) + (typeof batV === "number" ? " " + batV.toFixed(1) + "V" : "");
     batteryEl.classList.toggle("stale", bat === null && batV === null);
     batteryEl.classList.toggle("armed", typeof bat === "number" && bat <= 15); // low-battery warning
 
-    moTempEl.textContent = "MOT " + pair(s.motor_temp, "°", 0);
+    moTempEl.textContent = pair(s.motor_temp, "°", 0);
     moTempEl.classList.toggle("stale", !s.motor_temp || (s.motor_temp.x === null && s.motor_temp.y === null));
 
-    moCurEl.textContent = "CUR " + pair(s.motor_current, "A", 2);
+    moCurEl.textContent = pair(s.motor_current, "A", 2);
     moCurEl.classList.toggle("stale", !s.motor_current || (s.motor_current.x === null && s.motor_current.y === null));
 
-    distEl.textContent = "DIST " + num(s.distance_m, "m", 1);
+    distEl.textContent = num(s.distance_m, "m", 1);
     distEl.classList.toggle("stale", s.distance_m === null || s.distance_m === undefined);
   } catch (_) {}
 }
