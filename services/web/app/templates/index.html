@@ -4,7 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>RWS Cockpit</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='cockpit.css') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}?v={{ asset_version }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='cockpit.css') }}?v={{ asset_version }}" />
 </head>
 <body>
   <!-- Fullscreen camera feed (WHEP / WebRTC from MediaMTX). -->
@@ -54,6 +55,47 @@
     </label>
     <div class="sp-note">Custom використовує «Мін. розмір об'єкта» вище як поріг розміру. Компенсація —
       діапазон пошуку зсуву фону при повороті турелі (0 = вимкнено).</div>
+  </div>
+
+  <!-- Top-right map cluster: a Leaflet map (origin + turret azimuth sector) plus
+       two small gauges below it (azimuth range, elevation range). Live angles are
+       read from window.cockpit (fed by pollStatus) in map.js. -->
+  <div id="map-widgets" aria-hidden="true">
+    <div id="map-square">
+      <div id="map-canvas"></div>
+      <button id="map-settings-btn" type="button" title="Налаштування мапи" aria-label="Налаштування мапи">⚙</button>
+      <div id="map-settings-form" hidden>
+        <div class="sp-title">Налаштування мапи</div>
+        <div class="mps-row">
+          <label>Широта (lat)
+            <input id="map-lat" type="number" step="0.000001" value="0" />
+          </label>
+          <label>Довгота (lon)
+            <input id="map-lon" type="number" step="0.000001" value="0" />
+          </label>
+        </div>
+        <label>Поправка на північ (°)
+          <input id="map-north-corr" type="number" step="1" min="0" max="360" value="0" />
+        </label>
+        <button id="map-save" type="button">Зберегти</button>
+      </div>
+    </div>
+    <div class="map-gauges">
+      <div class="gauge">
+        <div class="gauge-head">
+          <span class="gauge-title">АЗИМУТ</span>
+          <span id="az-gauge-val" class="gauge-val">—</span>
+        </div>
+        <svg id="az-gauge" viewBox="8 18 84 48" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <div class="gauge">
+        <div class="gauge-head">
+          <span class="gauge-title">КУТ</span>
+          <span id="el-gauge-val" class="gauge-val">—</span>
+        </div>
+        <svg id="el-gauge" viewBox="22 44 60 41" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+    </div>
   </div>
 
   <!-- Full-width instrument bar (turret telemetry). Opaque overlay across the
@@ -155,10 +197,13 @@
     window.__FIRE_MODE__ = {{ fire_mode | tojson }};
     window.__SPEED__ = {{ speed | tojson }};
     window.__AI__ = {{ ai | tojson }};
+    window.__MAP__ = {{ map_settings | tojson }};
   </script>
   <!-- ONNX Runtime Web is imported inside ai-worker.js (off the main thread). -->
   <!-- ?v=… busts the browser cache so code changes always take effect. -->
+  <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}?v={{ asset_version }}"></script>
   <script src="{{ url_for('static', filename='cockpit.js') }}?v={{ asset_version }}"></script>
   <script src="{{ url_for('static', filename='ai.js') }}?v={{ asset_version }}"></script>
+  <script src="{{ url_for('static', filename='map.js') }}?v={{ asset_version }}"></script>
 </body>
 </html>

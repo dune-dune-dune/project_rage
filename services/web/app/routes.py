@@ -60,6 +60,10 @@ def _ai_settings():
     return current_app.config["AI_SETTINGS"]
 
 
+def _map_settings():
+    return current_app.config["MAP_SETTINGS"]
+
+
 def _asset_version() -> int:
     """A cache-busting version stamp = newest mtime of the JS/CSS assets.
 
@@ -69,7 +73,7 @@ def _asset_version() -> int:
     """
     static = current_app.static_folder or ""
     latest = 0
-    for name in ("ai.js", "ai-worker.js", "cockpit.js", "cockpit.css"):
+    for name in ("ai.js", "ai-worker.js", "cockpit.js", "cockpit.css", "map.js"):
         try:
             latest = max(latest, int(os.path.getmtime(os.path.join(static, name))))
         except OSError:
@@ -109,6 +113,7 @@ def index():
         cameras=settings.cameras,
         dry_run=settings.dry_run,
         crosshair=_crosshair().load(),
+        map_settings=_map_settings().load(),
         fire_mode=_controller().snapshot()["fire_mode"],
         speed=_controller().speed_config(),
         ai=_ai_config(settings),
@@ -169,6 +174,17 @@ def api_crosshair_get():
 def api_crosshair_set():
     payload = request.get_json(silent=True) or {}
     return jsonify(_crosshair().save(payload.get("x", 0), payload.get("y", 0)))
+
+
+@bp.get("/api/map-settings")
+def api_map_settings_get():
+    return jsonify(_map_settings().load())
+
+
+@bp.post("/api/map-settings")
+def api_map_settings_set():
+    payload = request.get_json(silent=True) or {}
+    return jsonify(_map_settings().save(payload))
 
 
 @bp.post("/api/track")

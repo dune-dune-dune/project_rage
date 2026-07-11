@@ -190,6 +190,11 @@ function paintKeys() {
   zoomEl.textContent = zoom.toFixed(1) + "×";
 }
 
+// Latest turret angles (degrees, or null before a valid reply), cached for the
+// map widgets which read them via window.cockpit.
+let lastAzDeg = null;
+let lastElDeg = null;
+
 async function pollStatus() {
   try {
     const r = await fetch("/api/status");
@@ -216,9 +221,13 @@ async function pollStatus() {
     // Turret-reported angles (azimuth / elevation). null until a valid reply.
     const az = s.angle_rot_deg;
     const el = s.angle_ele_deg;
+    lastAzDeg = typeof az === "number" ? az : null;
+    lastElDeg = typeof el === "number" ? el : null;
     const fmt = (v) => (typeof v === "number" ? v.toFixed(1) + "°" : "—");
     anglesEl.textContent = fmt(az) + " / " + fmt(el);
     anglesEl.classList.toggle("stale", az === null && el === null);
+    // Push live angles to the map widgets (no-op until map.js registers).
+    if (window.mapWidgets) window.mapWidgets.update();
 
     // Turret health telemetry (battery / motor temps & currents / rangefinder).
     const num = (v, suffix, digits) =>
@@ -417,4 +426,6 @@ window.cockpit = {
   get zoom() { return zoom; },       // digital zoom scale applied to the videos
   get camIndex() { return camIndex; },
   get videoEl() { return activeVideo(); },
+  get azDeg() { return lastAzDeg; },  // turret azimuth (deg) or null
+  get elDeg() { return lastElDeg; },  // turret elevation (deg) or null
 };

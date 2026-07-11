@@ -48,9 +48,9 @@ project_rage/
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
 │   │   ├── app/{__init__,config,turret,routes,ws,store,wsgi}.py  # factory, settings, control, routes, /api/ws, JSON stores
-│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,cockpit.css}  # video + HUD + YOLO (worker) + PIN login
-│   │   ├── app/static/vendor/  # onnxruntime-web (vendored by scripts/fetch_ort.sh) — NOT committed
-│   │   ├── scripts/{export_onnx.py,fetch_ort.sh}  # one-off: best.pt→best.onnx, fetch ORT web
+│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,map.js,cockpit.css}  # video + HUD + YOLO (worker) + map/gauges + PIN login
+│   │   ├── app/static/vendor/  # onnxruntime-web (fetch_ort.sh) + leaflet/ (fetch_leaflet.sh)
+│   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # one-off: best.pt→best.onnx, fetch ORT web, vendor Leaflet
 │   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws)
 │   │   ├── requirements-dev.txt  # pytest (dev-only; runtime stays torch/pytest-free)
 │   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # YOLO weights (gitignored runtime data)
@@ -124,6 +124,18 @@ as an SVG icon + label + value: azimuth/elevation (`AZ/EL`), battery (%+V, whole
 stays full-size behind it, so crosshair/AI aim geometry is untouched); `#hud` sits just above it. The
 `#hud` overlay (bottom-left) keeps the state badges (`SAFE`/`FIRE`/`SPD`/`ZOOM`/`TURRET`/`CAM`/`LINK`/
 `AI`/`TRACK`), the WASD/Space keys and the key-legend hint.
+
+**Map cluster (top-right):** `map.js` renders a `#map-widgets` block — a Leaflet map (`#map-square`,
+vendored `static/vendor/leaflet/`, **online OSM tiles**) centred on a saved origin, drawing the turret's
+azimuth **sector** (radius polygon) plus a live azimuth needle; below it two square SVG gauges show the
+azimuth range and the elevation range with live needles. The map's own ⚙ (`#map-settings-btn`) flips the
+map to a settings form (only lat, lon, `north_correction`; Save → `POST /api/map-settings`,
+`services/web/data/map_settings.json`). Live angles come from `window.cockpit.azDeg`/`.elDeg` (cached by
+`pollStatus`, which calls `window.mapWidgets.update()` at 5 Hz). Bearing mapping:
+`bearing = angle_rot_deg + north_correction`. The azimuth/elevation ranges (`az_min`/`az_max` = −72…72,
+`ele_min`/`ele_max` = −8…30) are **fixed constants** in the store (used to draw the sector + gauges, not
+user-editable). The AI/crosshair ⚙ button + `#settings-panel` are shifted left (`right: 292px`) so the
+map owns the corner.
 `ENABLE` stays on for the whole live
 session so the motors HOLD position (drops only on the deadman neutral packet); fire needs safety
 disengaged (ARMED).
@@ -151,7 +163,8 @@ rate; the `TurretController` overrides its velocity axes with that proportional 
 no FOV calibration needed, no absolute angle). The aim point is the crosshair position **including its
 programmatic offset**, computed by inverting the `object-fit: cover` + zoom mapping. First convert
 `best.pt → best.onnx` and vendor ORT once: `python scripts/export_onnx.py` + `bash scripts/fetch_ort.sh`
-(deps in `requirements-export.txt`, dev-only — the cockpit runtime stays torch-free).
+(deps in `requirements-export.txt`, dev-only — the cockpit runtime stays torch-free). Vendor Leaflet for
+the map widget once too: `bash scripts/fetch_leaflet.sh` (map *tiles* still need internet in the browser).
 
 **TTY controller keys** (`test_rws_control.py`, [README.md](README.md)): `WASD` latch axes, arrows
 momentary move, `1`/`2`/`4`/`5` = enable/slow/reload/forceHome, `Backspace` = safetyARM, `7`/`8`/`9` =
@@ -186,7 +199,8 @@ model. In brief:
   `readyState===OPEN` while dropping frames, black-holing the heartbeat and tripping the deadman. HTTP
   routes: `/`, `/healthz`, `/login` (GET/POST), `/logout`, `/api/input`, `/api/status`,
   `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
-  `/api/ai-settings` (GET/POST conf + min size), `/assets/model.onnx`, `/assets/classes.json`;
+  `/api/ai-settings` (GET/POST conf + min size), `/api/map-settings` (GET/POST map origin lat/lon +
+  north_correction), `/assets/model.onnx`, `/assets/classes.json`;
   WebSocket route: `/api/ws` (control input). The PIN gate is registered app-wide
   (`before_app_request`) so it also protects `/api/ws`.
 - **AI auto-track** runs client-side (`ai.js`, ONNX Runtime Web); the server only receives the resulting

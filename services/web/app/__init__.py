@@ -15,7 +15,7 @@ from flask import Flask
 
 from .config import load_settings
 from .routes import bp
-from .store import AiSettingsStore, CrosshairStore
+from .store import AiSettingsStore, CrosshairStore, MapSettingsStore
 from .turret import TurretController
 from .ws import sock
 
@@ -51,6 +51,7 @@ def create_app() -> Flask:
     app.config["TURRET"] = controller
     app.config["CROSSHAIR"] = CrosshairStore(settings.crosshair_file)
     app.config["AI_SETTINGS"] = AiSettingsStore(settings.ai_settings_file)
+    app.config["MAP_SETTINGS"] = MapSettingsStore(settings.map_settings_file)
     app.register_blueprint(bp)
     sock.init_app(app)  # /api/ws control channel (auth via the same before_request gate)
     return app

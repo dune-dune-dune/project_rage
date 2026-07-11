@@ -124,3 +124,66 @@ class AiSettingsStore:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             self._path.write_text(json.dumps(data))
         return data
+
+
+# --- Map / turret orientation settings ----------------------------------------
+# Persisted so the cockpit map widget can centre on a fixed origin and draw the
+# turret's azimuth sector / elevation range. Units are degrees.
+#   north_correction = compass offset (0..360) added to the turret's telemetry
+#                      azimuth to get a map bearing: bearing = az + north_correction.
+#   az_min/az_max = the turret's telemetry azimuth limits (deg), the swept sector
+#                   — FIXED constants (not user-editable), used to draw the gauges
+#                   and the map sector.
+#   ele_min/ele_max = the turret's elevation limits (deg) — also fixed.
+_MAP_LAT_DEFAULT = 0.0
+_MAP_LON_DEFAULT = 0.0
+_MAP_NORTH_CORR_DEFAULT = 0.0
+_MAP_AZ_MIN_DEFAULT = -72.0
+_MAP_AZ_MAX_DEFAULT = 72.0
+_MAP_ELE_MIN_DEFAULT = -8.0
+_MAP_ELE_MAX_DEFAULT = 30.0
+
+
+def _clamp_range(value: object, lo: float, hi: float, default: float) -> float:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return max(lo, min(hi, number))
+
+
+class MapSettingsStore:
+    def __init__(self, path: str) -> None:
+        self._path = Path(path)
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _normalize(raw: dict) -> dict:
+        return {
+            "lat": _clamp_range(raw.get("lat"), -90.0, 90.0, _MAP_LAT_DEFAULT),
+            "lon": _clamp_range(raw.get("lon"), -180.0, 180.0, _MAP_LON_DEFAULT),
+            "north_correction": _clamp_range(raw.get("north_correction"), 0.0, 360.0, _MAP_NORTH_CORR_DEFAULT),
+            # Fixed azimuth/elevation ranges (kept for the gauges + map sector).
+            "az_min": _MAP_AZ_MIN_DEFAULT,
+            "az_max": _MAP_AZ_MAX_DEFAULT,
+            "ele_min": _MAP_ELE_MIN_DEFAULT,
+            "ele_max": _MAP_ELE_MAX_DEFAULT,
+        }
+
+    def load(self) -> dict:
+        with self._lock:
+            try:
+                raw = json.loads(self._path.read_text())
+            except (FileNotFoundError, ValueError, OSError):
+                raw = {}
+            if not isinstance(raw, dict):
+                raw = {}
+            return self._normalize(raw)
+
+    def save(self, payload: object) -> dict:
+        raw = payload if isinstance(payload, dict) else {}
+        data = self._normalize(raw)
+        with self._lock:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.write_text(json.dumps(data))
+        return data

@@ -97,6 +97,7 @@ class Settings:
     # --- Persistence ---
     crosshair_file: str
     ai_settings_file: str
+    map_settings_file: str
     # Absolute path to the exported ONNX weights served to the browser, and the
     # optional class-names sidecar written by the export script.
     model_file: str
@@ -244,6 +245,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         secret_key=os.environ.get("SECRET_KEY", "").strip(),
         crosshair_file=str(_data_file("crosshair.json")),
         ai_settings_file=str(_data_file("ai_settings.json")),
+        map_settings_file=str(_data_file("map_settings.json")),
         model_file=str(_data_file("model", "best.onnx")),
         classes_file=str(_data_file("model", "classes.json")),
     )
