@@ -33,6 +33,10 @@ const AI = (() => {
   const ctx = canvas.getContext("2d");
   const aiBadge = document.getElementById("ai");
   const trackBadge = document.getElementById("track");
+  // Crosshair-side squares (mirror the badges next to the reticle).
+  const aiBox = document.getElementById("cp-ai");
+  const aiBoxLabel = aiBox && aiBox.querySelector(".cp-ai-label");
+  const trackBox = document.getElementById("cp-track");
 
   // YOLO frame-capture buffer — IDENTICAL to the proven pipeline (2D canvas,
   // drawImage(video), black letterbox, getImageData); only inference is offloaded.
@@ -134,6 +138,13 @@ const AI = (() => {
     aiBadge.className = "badge" + (mode !== "off" ? " ai-on" : "");
     trackBadge.textContent = trackOn ? "TRACK ON" : "TRACK OFF";
     trackBadge.className = "badge" + (trackOn ? " track-on" : "");
+    // Crosshair-side squares: AI = grey+hand when off, green "AI"/"AI+" otherwise;
+    // Track = grey/green via .off.
+    if (aiBox) {
+      aiBox.classList.toggle("off", mode === "off");
+      if (aiBoxLabel) aiBoxLabel.textContent = mode === "custom" ? "AI+" : "AI";
+    }
+    if (trackBox) trackBox.classList.toggle("off", !trackOn);
   }
 
   // I key: cycle OFF -> yolo -> custom -> OFF.

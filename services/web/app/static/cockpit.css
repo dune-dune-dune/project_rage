@@ -54,6 +54,119 @@ html, body {
 }
 #crosshair svg { stroke: currentColor; fill: currentColor; }
 
+/* Compact status panel pinned to the crosshair's lower-right. Absolute inside
+   the 100x100 crosshair box, so it tracks the reticle offset. */
+#cross-panel {
+  position: absolute;
+  left: 82px; /* clear of the r=26 ring — down-right of the reticle */
+  top: 78px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  /* No background box — kept transparent so it never blocks the view; the
+     text shadow alone carries readability over bright video. */
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  line-height: 1.2;
+  opacity: 0.9;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.8);
+}
+#cp-dist {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: #38ff9e; /* rangefinder in the crosshair's own accent */
+}
+#cp-dist.stale { opacity: 0.35; }
+#cp-cam {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 500;
+  color: #dce8ec; /* override the green inherited from #crosshair */
+  opacity: 0.9;
+}
+#cp-zoom {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+/* Safety padlock + fire-mode marks row, under the camera line. */
+#cp-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+/* Padlock: framed box, colour by safety state. SVG uses fill/stroke. */
+#cp-safety {
+  border: 1.5px solid #38ff9e;
+  border-radius: 4px;
+  padding: 1px;
+  box-sizing: content-box;
+}
+#cp-safety .lock-body { fill: currentColor; }
+#cp-safety .shackle-closed,
+#cp-safety .shackle-open { stroke: currentColor; }
+#cp-safety.safe {
+  color: #38ff9e;
+  border-color: #38ff9e;
+}
+#cp-safety.safe .shackle-open { display: none; }
+#cp-safety.armed {
+  color: #ff4d4d;
+  border-color: #ff4d4d;
+  animation: pulse 1s infinite;
+}
+#cp-safety.armed .shackle-closed { display: none; }
+/* Fire-mode marks: hide all by default, reveal the set for the active mode. */
+#cp-firemode {
+  color: #dce8ec;
+  fill: currentColor;
+}
+#cp-firemode .dot,
+#cp-firemode .line { display: none; }
+#cp-firemode[data-mode="short"] .dot-c { display: inline; }
+#cp-firemode[data-mode="medium"] .dot { display: inline; }
+#cp-firemode[data-mode="manual"] .line { display: inline; }
+/* AI + auto-track + fire-mode squares (right of the padlock). Green when active,
+   grey when inactive (.off, AI/track only). Same framed-box look as the padlock. */
+#cp-ai,
+#cp-track,
+#cp-fire {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border: 1.5px solid #38ff9e;
+  border-radius: 4px;
+  color: #38ff9e;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+}
+/* Inactive (manual / track-off): grey. */
+#cp-ai.off,
+#cp-track.off {
+  color: #9aa4a8;
+  border-color: #9aa4a8;
+}
+/* AI box: hand icon shown only in manual (.off); text label in AI modes. */
+#cp-ai .cp-hand {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  display: none;
+}
+#cp-ai .cp-ai-label { display: none; }
+#cp-ai.off .cp-hand { display: block; }
+#cp-ai:not(.off) .cp-ai-label { display: inline; }
+
 /* Settings button + panel. Shifted left of the top-right map cluster (which
    owns the corner) so the AI/crosshair panel never covers the map. */
 #settings-btn {
@@ -270,6 +383,42 @@ html, body {
    (icon + text) dim or pulse together without changing the JS logic. */
 .tele:has(.tele-val.stale) { opacity: 0.4; }
 .tele:has(.tele-val.armed) { color: #ff5b52; animation: pulse 1s infinite; } /* low battery */
+
+/* Connection status: two colour dots (turret + video) in the bottom bar. Grey
+   until known, green when online, red when offline. Each dot re-enables pointer
+   events (the bar itself is non-interactive) so its hover tooltip shows. */
+.status-dots { display: inline-flex; align-items: center; gap: 10px; height: 18px; }
+.status-dot {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #6b7680; /* neutral / unknown */
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  pointer-events: auto; /* re-enable hover over the non-interactive bar */
+  cursor: help;
+}
+.status-dot.ok { background: #3ddc84; box-shadow: 0 0 6px rgba(61, 220, 132, 0.7); }
+.status-dot.bad { background: #ff5b52; box-shadow: 0 0 6px rgba(255, 91, 82, 0.7); }
+/* Custom hover tooltip (native title is unreliable over a pointer-events:none
+   parent); text comes from the dot's data-tip, kept live by cockpit.js. */
+.status-dot:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #e8f0f2;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 30;
+}
 
 #hud {
   position: fixed;

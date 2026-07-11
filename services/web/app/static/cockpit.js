@@ -166,27 +166,58 @@ setInterval(sendInput, 150); // heartbeat
 
 // ---------------------------------------------------------------------- HUD
 const safetyEl = document.getElementById("safety");
-const linkEl = document.getElementById("link");
-const turretEl = document.getElementById("turret");
-const anglesEl = document.getElementById("angles");
+const videoDot = document.getElementById("dot-video"); // video status dot → bottom bar
+const turretDot = document.getElementById("dot-turret"); // turret status dot → bottom bar
 const batteryEl = document.getElementById("battery");
 const moTempEl = document.getElementById("motemp");
 const moCurEl = document.getElementById("mocur");
-const distEl = document.getElementById("dist");
+const distEl = document.getElementById("cp-dist"); // rangefinder → crosshair panel
 const fireModeEl = document.getElementById("firemode");
 const speedEl = document.getElementById("speed");
-const zoomEl = document.getElementById("zoom");
+const speedBarEl = document.getElementById("speed-bar"); // speed level → bottom telemetry bar
+const zoomEl = document.getElementById("cp-zoom"); // digital zoom → crosshair panel
+const safetyIconEl = document.getElementById("cp-safety"); // safety padlock → crosshair panel
+const fireModeIconEl = document.getElementById("cp-firemode"); // fire-mode marks → crosshair panel
 const keyEls = {};
 document.querySelectorAll(".key").forEach((el) => (keyEls[el.dataset.k] = el));
+
+// Paint a connection status dot (green .ok / red .bad / neutral grey) and update
+// its hover tooltip, e.g. "Статус турелі: онлайн". Used by the bottom-bar
+// turret & video dots.
+function setDot(el, label, cls, word) {
+  el.classList.toggle("ok", cls === "ok");
+  el.classList.toggle("bad", cls === "bad");
+  el.dataset.tip = label + ": " + word; // shown by .status-dot:hover::after
+}
+
+// Map a video camera name to its lens type shown in the crosshair panel.
+function cameraKind(label) {
+  if (!label) return "CAM —";
+  if (label.includes("95")) return "Ширококутна";
+  if (label.includes("96")) return "Вузькокутна";
+  return label;
+}
+
+// Map an RTCPeerConnection state to the video status word + colour.
+function paintVideo(state) {
+  if (state === "connected") return setDot(videoDot, "Статус відео", "ok", "онлайн");
+  if (state === "connecting" || state === "new" || state === "checking")
+    return setDot(videoDot, "Статус відео", "", "підключення");
+  return setDot(videoDot, "Статус відео", "bad", "офлайн");
+}
 
 function paintKeys() {
   for (const [k, el] of Object.entries(keyEls)) {
     el.classList.toggle("active", !!intent[k]);
   }
   fireModeEl.textContent = "FIRE " + intent.fire_mode.toUpperCase();
+  if (fireModeIconEl) fireModeIconEl.dataset.mode = intent.fire_mode; // crosshair-side marks (•/•••/▬)
   speedEl.textContent =
     "SPD " + intent.speed_level + "/" + SPEED.levels.length +
     " · " + SPEED.levels[intent.speed_level - 1] + "%";
+  if (speedBarEl)
+    speedBarEl.textContent =
+      intent.speed_level + " · " + SPEED.levels[intent.speed_level - 1] + "%";
   zoomEl.textContent = zoom.toFixed(1) + "×";
 }
 
@@ -199,33 +230,35 @@ async function pollStatus() {
   try {
     const r = await fetch("/api/status");
     const s = await r.json();
-    if (s.safety_off) {
+    const armed = !!s.safety_off;
+    if (armed) {
       safetyEl.textContent = "ARMED";
       safetyEl.className = "badge armed";
     } else {
       safetyEl.textContent = "SAFE";
       safetyEl.className = "badge safe";
     }
-    // Turret link / transmit state.
+    // Mirror the authoritative safety state on the crosshair: padlock icon
+    // (open+red / closed+green) and the reticle colour.
+    // #cp-safety is an <svg>: its .className is a read-only SVGAnimatedString,
+    // so assigning a string throws. Use setAttribute to set the class.
+    if (safetyIconEl) safetyIconEl.setAttribute("class", armed ? "armed" : "safe");
+    if (crosshairEl) crosshairEl.style.color = armed ? "#ff4d4d" : "#38ff9e";
+    // Turret link / transmit state → bottom-bar status dot.
     if (s.bind_error) {
-      turretEl.textContent = "TURRET BIND ERR";
-      turretEl.className = "badge armed";
+      setDot(turretDot, "Статус турелі", "bad", "помилка");
     } else if (s.dry_run) {
-      turretEl.textContent = "TURRET DRY";
-      turretEl.className = "badge dry";
+      setDot(turretDot, "Статус турелі", "", "тест");
     } else {
-      const link = (s.link || "offline").toUpperCase();
-      turretEl.textContent = "TURRET " + link;
-      turretEl.className = "badge " + (link === "ONLINE" ? "safe" : "armed");
+      const online = (s.link || "offline") === "online";
+      setDot(turretDot, "Статус турелі", online ? "ok" : "bad", online ? "онлайн" : "офлайн");
     }
     // Turret-reported angles (azimuth / elevation). null until a valid reply.
+    // No longer shown in the bar, but still cached for the map widgets.
     const az = s.angle_rot_deg;
     const el = s.angle_ele_deg;
     lastAzDeg = typeof az === "number" ? az : null;
     lastElDeg = typeof el === "number" ? el : null;
-    const fmt = (v) => (typeof v === "number" ? v.toFixed(1) + "°" : "—");
-    anglesEl.textContent = fmt(az) + " / " + fmt(el);
-    anglesEl.classList.toggle("stale", az === null && el === null);
     // Push live angles to the map widgets (no-op until map.js registers).
     if (window.mapWidgets) window.mapWidgets.update();
 
@@ -249,7 +282,8 @@ async function pollStatus() {
     moCurEl.textContent = pair(s.motor_current, "A", 2);
     moCurEl.classList.toggle("stale", !s.motor_current || (s.motor_current.x === null && s.motor_current.y === null));
 
-    distEl.textContent = num(s.distance_m, "m", 1);
+    // Rangefinder distance → crosshair panel.
+    distEl.textContent = num(s.distance_m, " м", 1);
     distEl.classList.toggle("stale", s.distance_m === null || s.distance_m === undefined);
   } catch (_) {}
 }
@@ -323,9 +357,12 @@ applyCrosshair();
 // switching INSTANT, every camera gets its own <video> and a persistent
 // RTCPeerConnection established up front; TAB only flips which pre-decoded
 // stream is visible — no renegotiation, no ffmpeg cold start, no ICE wait.
-const cameraEl = document.getElementById("camera");
+const cameraEl = document.getElementById("cp-camtype"); // lens type → crosshair panel
 const cameras = Array.isArray(window.__CAMERAS__) ? window.__CAMERAS__ : [];
 let camIndex = 0;
+// One RTCPeerConnection per camera, so a TAB switch can repaint the video
+// status from the target camera's current connection state.
+const pcs = [];
 
 // Build one <video> per camera, reusing the static #video for the first.
 const baseVideo = document.getElementById("video");
@@ -350,23 +387,26 @@ function setActiveCamera(index) {
   camIndex = index;
   videoEls.forEach((v, i) => v.classList.toggle("active", i === index));
   const cam = cameras[index];
-  cameraEl.textContent = (cam && cam.label) || "CAM —";
+  cameraEl.textContent = cameraKind(cam && cam.label);
   applyZoom();
+  // Repaint the video status from the newly active camera's connection state.
+  paintVideo(cam ? (pcs[index] && pcs[index].connectionState) : "none");
 }
 
 async function connectCamera(index) {
   const cam = cameras[index];
   const videoEl = videoEls[index];
   if (!cam) {
-    if (index === camIndex) linkEl.textContent = "NO VIDEO URL";
+    if (index === camIndex) paintVideo("none");
     return;
   }
   // No STUN: LAN deployment, host candidates are local so ICE completes at once.
   const pc = new RTCPeerConnection({});
+  pcs[index] = pc;
   pc.addTransceiver("video", { direction: "recvonly" });
   pc.ontrack = (ev) => { videoEl.srcObject = ev.streams[0]; };
   pc.onconnectionstatechange = () => {
-    if (index === camIndex) linkEl.textContent = "VIDEO " + pc.connectionState.toUpperCase();
+    if (index === camIndex) paintVideo(pc.connectionState);
   };
 
   try {
@@ -382,7 +422,7 @@ async function connectCamera(index) {
     const answer = await res.text();
     await pc.setRemoteDescription({ type: "answer", sdp: answer });
   } catch (err) {
-    if (index === camIndex) linkEl.textContent = "NO SIGNAL";
+    if (index === camIndex) paintVideo("failed");
     console.error("WHEP failed", err);
   }
 }
@@ -413,7 +453,7 @@ setActiveCamera(0);
 if (cameras.length) {
   cameras.forEach((_, i) => connectCamera(i));
 } else {
-  linkEl.textContent = "NO VIDEO URL";
+  paintVideo("none");
 }
 
 // ------------------------------------------------------- shared state for ai.js

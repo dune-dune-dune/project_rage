@@ -117,13 +117,29 @@ a drone. The ⚙ button (top-right) opens crosshair position settings (H/V offse
 `services/web/data/crosshair.json` via `/api/crosshair`) and AI settings (confidence threshold default 70%,
 min object size in px, and Custom motion threshold %, `services/web/data/ai_settings.json` via
 `/api/ai-settings`). A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
-bottom edge, styled in `cockpit.css`) shows **turret telemetry** parsed from the reply stream, each metric
-as an SVG icon + label + value: azimuth/elevation (`AZ/EL`), battery (%+V, whole item pulses red under
-15%), motor temps (`MOT` X/Y), motor currents (`CUR` X/Y) and rangefinder distance (`DIST`); each dims
-(`.stale`) until its reply arrives. The bar is an opaque overlay over the video's bottom edge (the video
-stays full-size behind it, so crosshair/AI aim geometry is untouched); `#hud` sits just above it. The
-`#hud` overlay (bottom-left) keeps the state badges (`SAFE`/`FIRE`/`SPD`/`ZOOM`/`TURRET`/`CAM`/`LINK`/
-`AI`/`TRACK`), the WASD/Space keys and the key-legend hint.
+bottom edge, styled in `cockpit.css`) shows four groups, each an SVG icon + label + value:
+battery (%+V, `#battery`, whole item pulses red under 15%), motor temps (`#motemp` X/Y),
+motor currents (`#mocur` X/Y), and a **«Статус підключення»** group with two coloured dots — turret
+(`#dot-turret`, green/red from `s.link`/`dry_run`/`bind_error`) and video (`#dot-video`, green/red from
+the active camera's `RTCPeerConnection.connectionState`). Each dot's hover tooltip (`title`) shows
+«Статус турелі/відео: онлайн/офлайн» (`setDot`/`paintVideo` in `cockpit.js`, `.ok`/`.bad` classes);
+telemetry values dim (`.stale`) until their reply arrives. The bar is an opaque overlay over the video's
+bottom edge (the video stays full-size behind it, so crosshair/AI aim geometry is untouched); `#hud` sits
+just above it. Azimuth/elevation are no longer shown in the bar but still cached (`lastAzDeg`/`lastElDeg`)
+for the map widgets. A small **crosshair status panel** (`#cross-panel`, a child of `#crosshair` so it
+tracks the reticle offset) sits at the crosshair's lower-right and shows the rangefinder distance
+(`#cp-dist`) plus the camera lens type (`#cp-camtype`: CAM 95 → Ширококутна, CAM 96 → Вузькокутна via
+`cameraKind`) and digital zoom (`#cp-zoom`). Below the camera line a `#cp-state` row shows four boxed
+indicators in order **safety · AI · track · fire-mode**: a **safety padlock** (`#cp-safety`: closed+green
+outline when safe, open+red outline when armed — synced to `s.safety_off` in `pollStatus`, which also
+recolours the reticle green/red via `crosshairEl.style.color`); an **AI square** (`#cp-ai`: grey box +
+hand icon = manual/OFF, green «AI»/«AI+» = YOLO/custom); a **track square** (`#cp-track`: grey «T» off,
+green on); and a **fire-mode box** (`#cp-fire` wrapping `#cp-firemode`, `data-mode` set in `paintKeys`:
+`•` short / `•••` medium / `▬` manual). AI/track mirror the `#ai`/`#track` badges and are updated by
+`AI.setBadges()` in `ai.js` (`.off` class toggles grey↔green; `#cp-ai`/`#cp-track`/`#cp-fire` are
+`<div>`s, so `classList` works — unlike the `<svg>` `#cp-safety`, whose class must be set via
+`setAttribute`). The `#hud` overlay (bottom-left) keeps the state badges
+(`SAFE`/`FIRE`/`SPD`/`AI`/`TRACK`), the WASD/Space keys and the key-legend hint.
 
 **Map cluster (top-right):** `map.js` renders a `#map-widgets` block — a Leaflet map (`#map-square`,
 vendored `static/vendor/leaflet/`, **online OSM tiles**) centred on a saved origin, drawing the turret's
