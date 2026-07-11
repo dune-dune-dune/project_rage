@@ -40,6 +40,58 @@ html, body {
   z-index: 3;
 }
 
+/* Top-centre heading tape (compass). A scrolling horizontal degree ribbon with
+   a boxed current-bearing readout above it. Non-interactive overlay; sits above
+   the video but below the settings UI. Centred, capped width so it clears the
+   top-left ⚙ button and the top-right map cluster on normal screens. */
+#compass {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, 56vw);
+  z-index: 12;
+  pointer-events: none;
+  user-select: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.9));
+}
+#compass-val {
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+  color: #38ff9e;
+  padding: 1px 10px;
+  margin-bottom: 2px;
+  border: 1px solid rgba(56, 255, 158, 0.6);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.5);
+}
+#compass-tape {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+#compass-tape.stale { opacity: 0.4; }
+/* Tape parts (compass.js sets only geometry; colour/weight live here). */
+#compass-tape .c-baseline { stroke: rgba(255, 255, 255, 0.5); stroke-width: 1; }
+#compass-tape .c-tick { stroke: rgba(255, 255, 255, 0.55); stroke-width: 1; }
+#compass-tape .c-major { stroke: rgba(255, 255, 255, 0.85); stroke-width: 1.4; }
+#compass-tape .c-card { stroke: #38ff9e; stroke-width: 1.6; }
+#compass-tape .c-label {
+  fill: #dce8ec;
+  font-size: 11px;
+  font-weight: 600;
+  text-anchor: middle;
+  font-variant-numeric: tabular-nums;
+}
+#compass-tape .c-card-label { fill: #38ff9e; font-weight: 700; font-size: 12px; }
+#compass-tape .c-index { fill: #38ff9e; }
+
 /* Movable aiming crosshair. */
 #crosshair {
   position: fixed;

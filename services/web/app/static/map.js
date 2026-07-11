@@ -244,6 +244,11 @@
     updateGauge(azGauge, typeof az === "number" ? az : null);
     updateGauge(elGauge, typeof ele === "number" ? ele : null);
     updateMapNeedle();
+    // Drive the top-centre compass tape with the same compass bearing the
+    // azimuth gauge / map needle use (azimuth + north correction, 0..360).
+    if (window.compass) {
+      window.compass.update(typeof az === "number" ? norm360(azToBearing(az)) : null);
+    }
   }
 
   // --- settings form ----------------------------------------------------------

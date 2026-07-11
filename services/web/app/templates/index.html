@@ -14,6 +14,14 @@
   <!-- YOLO detection overlay (drawn only in AI mode; shares the video's zoom). -->
   <canvas id="detections" aria-hidden="true"></canvas>
 
+  <!-- Top-centre heading tape (compass). A horizontal degree ribbon that scrolls
+       with the turret's compass bearing (azimuth + north correction). The value
+       and tick geometry are drawn by compass.js, driven from map.js. -->
+  <div id="compass" aria-hidden="true">
+    <div id="compass-val">—</div>
+    <svg id="compass-tape" viewBox="0 0 480 46" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
   <!-- Movable aiming crosshair (position from settings, persisted server-side). -->
   <div id="crosshair" aria-hidden="true">
     <svg viewBox="0 0 100 100" width="100" height="100">
@@ -232,6 +240,8 @@
   <script src="{{ url_for('static', filename='vendor/leaflet/leaflet.js') }}?v={{ asset_version }}"></script>
   <script src="{{ url_for('static', filename='cockpit.js') }}?v={{ asset_version }}"></script>
   <script src="{{ url_for('static', filename='ai.js') }}?v={{ asset_version }}"></script>
+  <!-- compass.js before map.js so window.compass exists when map.js first paints. -->
+  <script src="{{ url_for('static', filename='compass.js') }}?v={{ asset_version }}"></script>
   <script src="{{ url_for('static', filename='map.js') }}?v={{ asset_version }}"></script>
 </body>
 </html>

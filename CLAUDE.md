@@ -48,7 +48,7 @@ project_rage/
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
 │   │   ├── app/{__init__,config,turret,routes,ws,store,wsgi}.py  # factory, settings, control, routes, /api/ws, JSON stores
-│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,map.js,cockpit.css}  # video + HUD + YOLO (worker) + map/gauges + PIN login
+│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,map.js,compass.js,cockpit.css}  # video + HUD + YOLO (worker) + map/gauges + compass + PIN login
 │   │   ├── app/static/vendor/  # onnxruntime-web (fetch_ort.sh) + leaflet/ (fetch_leaflet.sh)
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # one-off: best.pt→best.onnx, fetch ORT web, vendor Leaflet
 │   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws)
@@ -148,7 +148,14 @@ azimuth range and the elevation range with live needles. The map's own ⚙ (`#ma
 map to a settings form (only lat, lon, `north_correction`; Save → `POST /api/map-settings`,
 `services/web/data/map_settings.json`). Live angles come from `window.cockpit.azDeg`/`.elDeg` (cached by
 `pollStatus`, which calls `window.mapWidgets.update()` at 5 Hz). Bearing mapping:
-`bearing = angle_rot_deg + north_correction`. The azimuth/elevation ranges (`az_min`/`az_max` = −72…72,
+`bearing = angle_rot_deg + north_correction`.
+
+**Compass (top-centre):** `compass.js` renders `#compass` — a horizontal scrolling
+degree tape (`#compass-tape`, SVG) with a boxed current-bearing readout above it
+(`#compass-val`). It shows the SAME compass bearing as the azimuth gauge/map needle
+(`norm360(azimuth + north_correction)`, 0…360, cardinals «Пн/Сх/Пд/Зх» at
+0/90/180/270). It is driven by `map.js`'s `update()` (which owns the bearing math)
+via `window.compass.update(bearing)`, so it refreshes at the same 5 Hz. The azimuth/elevation ranges (`az_min`/`az_max` = −72…72,
 `ele_min`/`ele_max` = −8…30) are **fixed constants** in the store (used to draw the sector + gauges, not
 user-editable). The AI/crosshair ⚙ button + `#settings-panel` are shifted left (`right: 292px`) so the
 map owns the corner.
