@@ -165,15 +165,20 @@ setInterval(() => {
 setInterval(sendInput, 150); // heartbeat
 
 // ---------------------------------------------------------------------- HUD
-const safetyEl = document.getElementById("safety");
+// The former bottom-left HUD (#safety / #firemode / #speed badges) was removed;
+// its state is shown beside the crosshair (#cp-*) and in the bottom bar. A no-op
+// stub keeps the write-only badge assignments below harmless if the element is
+// absent — assigning .textContent/.className to a plain object never throws.
+const noopBadge = () => ({ textContent: "", className: "" });
+const safetyEl = document.getElementById("safety") || noopBadge();
 const videoDot = document.getElementById("dot-video"); // video status dot → bottom bar
 const turretDot = document.getElementById("dot-turret"); // turret status dot → bottom bar
 const batteryEl = document.getElementById("battery");
 const moTempEl = document.getElementById("motemp");
 const moCurEl = document.getElementById("mocur");
 const distEl = document.getElementById("cp-dist"); // rangefinder → crosshair panel
-const fireModeEl = document.getElementById("firemode");
-const speedEl = document.getElementById("speed");
+const fireModeEl = document.getElementById("firemode") || noopBadge();
+const speedEl = document.getElementById("speed") || noopBadge();
 const speedBarEl = document.getElementById("speed-bar"); // speed level → bottom telemetry bar
 const zoomEl = document.getElementById("cp-zoom"); // digital zoom → crosshair panel
 const safetyIconEl = document.getElementById("cp-safety"); // safety padlock → crosshair panel
@@ -318,8 +323,6 @@ applyZoom();
 // Crosshair offset (percent of viewport from centre) is persisted server-side
 // via /api/crosshair so it survives restarts and can be reused by other tooling.
 const crosshairEl = document.getElementById("crosshair");
-const settingsBtn = document.getElementById("settings-btn");
-const settingsPanel = document.getElementById("settings-panel");
 const xhEl = document.getElementById("xh");
 const xvEl = document.getElementById("xv");
 const xhVal = document.getElementById("xh-val");
@@ -349,8 +352,68 @@ function saveCrosshair() {
 xhEl.addEventListener("input", () => { cross.x = parseFloat(xhEl.value) || 0; applyCrosshair(); saveCrosshair(); });
 xvEl.addEventListener("input", () => { cross.y = parseFloat(xvEl.value) || 0; applyCrosshair(); saveCrosshair(); });
 document.getElementById("xh-reset").addEventListener("click", () => { cross = { x: 0, y: 0 }; applyCrosshair(); saveCrosshair(); });
-settingsBtn.addEventListener("click", () => { settingsPanel.hidden = !settingsPanel.hidden; });
 applyCrosshair();
+
+// ------------------------------------------------------ settings menu (top-left)
+// One button toggles a dropdown; each dropdown item opens exactly one settings
+// panel (map / crosshair / AI / alerts) with mutual exclusion. Panel contents
+// and their own handlers live in this file (crosshair), ai.js (AI) and map.js
+// (map origin) — the controller only shows/hides.
+(function initMenu() {
+  const menuBtn = document.getElementById("menu-btn");
+  const dropdown = document.getElementById("menu-dropdown");
+  if (!menuBtn || !dropdown) return;
+  const panels = {
+    map: document.getElementById("map-settings-form"),
+    crosshair: document.getElementById("crosshair-panel"),
+    ai: document.getElementById("ai-panel"),
+    alerts: document.getElementById("alerts-panel"),
+  };
+  const panelEls = Object.values(panels).filter(Boolean);
+
+  function closePanels() {
+    for (const p of panelEls) p.hidden = true;
+  }
+  function closeAll() {
+    dropdown.hidden = true;
+    closePanels();
+  }
+  const anyOpen = () => !dropdown.hidden || panelEls.some((p) => !p.hidden);
+
+  function openPanel(key) {
+    const panel = panels[key];
+    if (!panel) return;
+    const wasOpen = !panel.hidden;
+    closeAll();
+    if (wasOpen) return; // clicking the active item toggles it closed
+    // The map form mirrors server-side cfg; refresh its inputs before showing.
+    if (key === "map" && window.mapWidgets && window.mapWidgets.fillForm) {
+      window.mapWidgets.fillForm();
+    }
+    panel.hidden = false;
+  }
+
+  // The ⚙ button toggles the whole menu: if anything is open (dropdown OR a
+  // panel), it closes it; otherwise it opens the dropdown.
+  menuBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (anyOpen()) closeAll();
+    else dropdown.hidden = false;
+  });
+  dropdown.querySelectorAll(".menu-item").forEach((item) => {
+    item.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openPanel(item.dataset.panel);
+    });
+  });
+  // Click anywhere outside the button/dropdown/panels closes everything.
+  document.addEventListener("click", (e) => {
+    if (!anyOpen()) return;
+    if (menuBtn.contains(e.target) || dropdown.contains(e.target)) return;
+    if (panelEls.some((p) => p.contains(e.target))) return;
+    closeAll();
+  });
+})();
 
 // -------------------------------------------------------------- WHEP video
 // Minimal WHEP (WebRTC-HTTP Egress Protocol) client for MediaMTX. To make TAB

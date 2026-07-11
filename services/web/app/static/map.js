@@ -25,7 +25,7 @@
 
   // --- DOM --------------------------------------------------------------------
   const canvas = document.getElementById("map-canvas");
-  const settingsBtn = document.getElementById("map-settings-btn");
+  // Map settings live in the top-left menu now; there is no on-map ⚙ button.
   const form = document.getElementById("map-settings-form");
   const saveBtn = document.getElementById("map-save");
   const inputs = {
@@ -77,19 +77,45 @@
     return pts;
   }
 
+  // Turret emblem marker (badge style, static — it does NOT rotate with azimuth;
+  // the sector polygon + needle show heading). Rendered as a Leaflet divIcon so
+  // no image asset is needed (keeps the map offline-friendly like the vendored
+  // Leaflet); the ".turret-marker" CSS strips divIcon's default white box.
+  const TURRET_EMBLEM = `
+<svg viewBox="0 0 40 40" width="40" height="40" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="20" cy="20" r="18" fill="#0b1116" stroke="#38ff9e" stroke-width="2"/>
+  <!-- top-down turret: ring base, hub, and a barrel pointing forward (up) -->
+  <circle cx="20" cy="21" r="8" fill="none" stroke="#38ff9e" stroke-width="2.4"/>
+  <rect x="18" y="5" width="4" height="16" rx="1.4" fill="#38ff9e"/>
+  <rect x="16.5" y="4.5" width="7" height="3" rx="1.2" fill="#38ff9e"/>
+  <circle cx="20" cy="21" r="2.6" fill="#38ff9e"/>
+</svg>`;
+
   function initMap() {
     if (typeof L === "undefined" || !canvas) return; // Leaflet not vendored
     map = L.map(canvas, {
       center: [cfg.lat, cfg.lon],
       zoom: 15,
-      zoomControl: true,
-      attributionControl: true,
+      zoomControl: false,        // no +/- buttons
+      attributionControl: false, // no "Leaflet" attribution
+      maxZoom: 16,               // Dark Gray Canvas service tops out at z16
     });
-    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 19,
-      attribution: "© OpenStreetMap",
+    // Dark basemap (Esri World Dark Gray Canvas): base tiles + labels overlay.
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 16,
     }).addTo(map);
-    marker = L.marker([cfg.lat, cfg.lon]).addTo(map);
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}", {
+      maxZoom: 16,
+    }).addTo(map);
+    marker = L.marker([cfg.lat, cfg.lon], {
+      icon: L.divIcon({
+        html: TURRET_EMBLEM,
+        className: "turret-marker",
+        iconSize: [40, 40],
+        iconAnchor: [20, 20], // centre the emblem on the origin
+      }),
+      interactive: false,
+    }).addTo(map);
     sector = L.polygon([], {
       color: "#38ff9e", weight: 1, opacity: 0.6,
       fillColor: "#38ff9e", fillOpacity: 0.12,
@@ -237,13 +263,6 @@
     };
   }
 
-  if (settingsBtn && form) {
-    settingsBtn.addEventListener("click", () => {
-      if (form.hidden) fillForm();
-      form.hidden = !form.hidden;
-    });
-  }
-
   if (saveBtn) {
     saveBtn.addEventListener("click", async () => {
       const payload = readForm();
@@ -272,6 +291,7 @@
   initMap();
   update();
 
-  // Exposed so cockpit.js pollStatus() can drive live updates at its 5 Hz cadence.
-  window.mapWidgets = { update };
+  // Exposed for cockpit.js: update() drives live gauges/needle at 5 Hz;
+  // fillForm() lets the top-left menu refresh the map inputs before showing.
+  window.mapWidgets = { update, fillForm };
 })();

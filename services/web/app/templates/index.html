@@ -57,9 +57,20 @@
     </div>
   </div>
 
-  <!-- Settings button + panel (top-right). -->
-  <button id="settings-btn" title="Налаштування" aria-label="Налаштування">⚙</button>
-  <div id="settings-panel" hidden>
+  <!-- Top-left settings menu: one button → dropdown → four settings panels.
+       Consolidates the former top-right ⚙ (crosshair + AI) and the on-map ⚙
+       (map origin) into a single entry point. Opening/closing + mutual
+       exclusion are wired in cockpit.js. -->
+  <button id="menu-btn" title="Налаштування" aria-label="Налаштування">⚙</button>
+  <div id="menu-dropdown" hidden>
+    <button class="menu-item" type="button" data-panel="map">Налаштування мапи</button>
+    <button class="menu-item" type="button" data-panel="crosshair">Налаштування прицілу</button>
+    <button class="menu-item" type="button" data-panel="ai">Налаштування ШІ моделі</button>
+    <button class="menu-item" type="button" data-panel="alerts">Налаштування алертів</button>
+  </div>
+
+  <!-- Crosshair settings. -->
+  <div id="crosshair-panel" class="menu-panel" hidden>
     <div class="sp-title">Приціл</div>
     <label>Горизонталь <span id="xh-val">0</span>%
       <input id="xh" type="range" min="-50" max="50" step="1" value="0" />
@@ -68,7 +79,10 @@
       <input id="xv" type="range" min="-50" max="50" step="1" value="0" />
     </label>
     <button id="xh-reset" type="button">Скинути в центр</button>
+  </div>
 
+  <!-- AI model settings. -->
+  <div id="ai-panel" class="menu-panel" hidden>
     <div class="sp-title">Модель (ШІ)</div>
     <label>Впевненість (conf) <span id="ai-conf-val">70</span>%
       <input id="ai-conf" type="range" min="1" max="99" step="1" value="70" />
@@ -88,28 +102,35 @@
       діапазон пошуку зсуву фону при повороті турелі (0 = вимкнено).</div>
   </div>
 
+  <!-- Map origin settings (moved out of the map square into the left menu). -->
+  <div id="map-settings-form" class="menu-panel" hidden>
+    <div class="sp-title">Налаштування мапи</div>
+    <div class="mps-row">
+      <label>Широта (lat)
+        <input id="map-lat" type="number" step="0.000001" value="0" />
+      </label>
+      <label>Довгота (lon)
+        <input id="map-lon" type="number" step="0.000001" value="0" />
+      </label>
+    </div>
+    <label>Поправка на північ (°)
+      <input id="map-north-corr" type="number" step="1" min="0" max="360" value="0" />
+    </label>
+    <button id="map-save" type="button">Зберегти</button>
+  </div>
+
+  <!-- Alerts settings (placeholder — functionality added later). -->
+  <div id="alerts-panel" class="menu-panel" hidden>
+    <div class="sp-title">Налаштування алертів</div>
+    <div class="sp-note">Скоро буде додано.</div>
+  </div>
+
   <!-- Top-right map cluster: a Leaflet map (origin + turret azimuth sector) plus
        two small gauges below it (azimuth range, elevation range). Live angles are
        read from window.cockpit (fed by pollStatus) in map.js. -->
   <div id="map-widgets" aria-hidden="true">
     <div id="map-square">
       <div id="map-canvas"></div>
-      <button id="map-settings-btn" type="button" title="Налаштування мапи" aria-label="Налаштування мапи">⚙</button>
-      <div id="map-settings-form" hidden>
-        <div class="sp-title">Налаштування мапи</div>
-        <div class="mps-row">
-          <label>Широта (lat)
-            <input id="map-lat" type="number" step="0.000001" value="0" />
-          </label>
-          <label>Довгота (lon)
-            <input id="map-lon" type="number" step="0.000001" value="0" />
-          </label>
-        </div>
-        <label>Поправка на північ (°)
-          <input id="map-north-corr" type="number" step="1" min="0" max="360" value="0" />
-        </label>
-        <button id="map-save" type="button">Зберегти</button>
-      </div>
     </div>
     <div class="map-gauges">
       <div class="gauge">
@@ -195,28 +216,6 @@
           <span id="dot-video" class="status-dot" data-tip="Статус відео: —"></span>
         </span>
       </div>
-    </div>
-  </div>
-
-  <!-- Heads-up overlay. -->
-  <div id="hud">
-    <div class="hud-row">
-      <span id="safety" class="badge safe">SAFE</span>
-      {% if dry_run %}<span class="badge dry">DRY-RUN</span>{% endif %}
-      <span id="firemode" class="badge">FIRE —</span>
-      <span id="speed" class="badge">SPD —</span>
-      <span id="ai" class="badge">AI OFF</span>
-      <span id="track" class="badge">TRACK OFF</span>
-    </div>
-    <div class="hud-row" id="axes">
-      <span class="key" data-k="up">W</span>
-      <span class="key" data-k="left">A</span>
-      <span class="key" data-k="down">S</span>
-      <span class="key" data-k="right">D</span>
-      <span class="key" data-k="fire">SPACE</span>
-    </div>
-    <div class="hud-row hint">
-      W/A/S/D — рух · 1/2 — швидкість · F — запобіжник · Space — постріл · M — режим · Q/E — зум · TAB — камера · I — ШІ · T — трек
     </div>
   </div>
 

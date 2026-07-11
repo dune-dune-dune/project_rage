@@ -167,13 +167,13 @@ html, body {
 #cp-ai.off .cp-hand { display: block; }
 #cp-ai:not(.off) .cp-ai-label { display: inline; }
 
-/* Settings button + panel. Shifted left of the top-right map cluster (which
-   owns the corner) so the AI/crosshair panel never covers the map. */
-#settings-btn {
+/* Top-left settings menu: one button, a dropdown, and the four settings panels
+   (map / crosshair / AI / alerts). Consolidates all settings into one corner. */
+#menu-btn {
   position: fixed;
   top: 14px;
-  right: 292px;
-  z-index: 20;
+  left: 14px;
+  z-index: 25;
   width: 40px;
   height: 40px;
   border-radius: 10px;
@@ -185,13 +185,42 @@ html, body {
   cursor: pointer;
   backdrop-filter: blur(6px);
 }
-#settings-btn:hover { background: rgba(0, 0, 0, 0.7); }
+#menu-btn:hover { background: rgba(0, 0, 0, 0.7); }
 
-#settings-panel {
+#menu-dropdown {
   position: fixed;
   top: 62px;
-  right: 292px;
-  z-index: 20;
+  left: 14px;
+  z-index: 25;
+  width: 220px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 2px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+#menu-dropdown[hidden] { display: none; }
+.menu-item {
+  text-align: left;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #e8f0f2;
+  font-size: 13px;
+  cursor: pointer;
+}
+.menu-item:hover { background: rgba(255, 255, 255, 0.12); }
+
+/* Shared style for every settings panel opened from the menu. */
+.menu-panel {
+  position: fixed;
+  top: 62px;
+  left: 14px;
+  z-index: 25;
   width: 240px;
   display: flex;
   flex-direction: column;
@@ -202,12 +231,23 @@ html, body {
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
-#settings-panel[hidden] { display: none; }
-#settings-panel .sp-title { font-weight: 700; letter-spacing: 0.05em; font-size: 13px; }
-#settings-panel .sp-note { font-size: 11px; opacity: 0.65; line-height: 1.3; }
-#settings-panel label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
-#settings-panel input[type="range"] { width: 100%; }
-#settings-panel button {
+.menu-panel[hidden] { display: none; }
+.menu-panel .sp-title { font-weight: 700; letter-spacing: 0.05em; font-size: 13px; }
+.menu-panel .sp-note { font-size: 11px; opacity: 0.65; line-height: 1.3; }
+.menu-panel label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.menu-panel input[type="range"] { width: 100%; }
+.menu-panel .mps-row { display: flex; gap: 8px; }
+.menu-panel .mps-row label { flex: 1; }
+.menu-panel input[type="number"] {
+  width: 100%;
+  padding: 5px 6px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.08);
+  color: #e8f0f2;
+  font-size: 12px;
+}
+.menu-panel button {
   padding: 8px;
   border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -216,7 +256,10 @@ html, body {
   font-size: 12px;
   cursor: pointer;
 }
-#settings-panel button:hover { background: rgba(255, 255, 255, 0.18); }
+.menu-panel button:hover { background: rgba(255, 255, 255, 0.18); }
+
+/* Turret emblem marker (Leaflet divIcon) — strip the default white box. */
+.turret-marker { background: transparent; border: none; }
 
 /* Top-right map cluster: Leaflet map + two square gauges below it. Owns the
    top-right corner; the AI settings panel is shifted left of it. Interactive
@@ -245,62 +288,6 @@ html, body {
   backdrop-filter: blur(8px);
 }
 #map-canvas { position: absolute; inset: 0; background: #10171d; }
-/* Leaflet paints attribution/controls; keep them subtle and readable on dark. */
-#map-canvas .leaflet-control-attribution { font-size: 9px; }
-
-#map-settings-btn {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 500; /* above Leaflet panes/controls inside the square */
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(0, 0, 0, 0.6);
-  color: #e8f0f2;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-#map-settings-btn:hover { background: rgba(0, 0, 0, 0.8); }
-
-/* Settings form overlays the map inside the same square. */
-#map-settings-form {
-  position: absolute;
-  inset: 0;
-  z-index: 400;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px;
-  overflow-y: auto;
-  background: rgba(6, 10, 14, 0.96);
-}
-#map-settings-form[hidden] { display: none; }
-#map-settings-form .sp-title { font-weight: 700; letter-spacing: 0.05em; font-size: 13px; padding-right: 34px; }
-#map-settings-form label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; flex: 1; }
-#map-settings-form .mps-row { display: flex; gap: 8px; }
-#map-settings-form input[type="number"] {
-  width: 100%;
-  padding: 5px 6px;
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08);
-  color: #e8f0f2;
-  font-size: 12px;
-}
-#map-settings-form button {
-  margin-top: 2px;
-  padding: 8px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.12);
-  color: #e8f0f2;
-  font-size: 12px;
-  cursor: pointer;
-}
-#map-settings-form button:hover { background: rgba(255, 255, 255, 0.2); }
 
 .map-gauges { display: flex; gap: 8px; }
 .gauge {
@@ -420,56 +407,6 @@ html, body {
   z-index: 30;
 }
 
-#hud {
-  position: fixed;
-  left: 16px;
-  bottom: 76px; /* clear the telemetry bar below */
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(6px);
-  user-select: none;
-  pointer-events: none;
-}
-
-.hud-row { display: flex; align-items: center; gap: 8px; }
-
-.badge {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  padding: 4px 10px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.12);
-}
-.badge.safe { background: #1f6f43; }
-.badge.armed { background: #b3261e; animation: pulse 1s infinite; }
-.badge.dry { background: #7a5c00; }
-.badge.ai-on { background: #1c6ea4; }
-.badge.track-on { background: #b3261e; animation: pulse 1s infinite; }
-/* Telemetry badge with no turret data yet (values null). */
-.badge.stale { opacity: 0.45; }
-
+/* Pulse animation retained — used by the bottom telemetry bar's low-battery
+   warning (.tele:has(.tele-val.armed)). The former left HUD was removed. */
 @keyframes pulse { 50% { opacity: 0.55; } }
-
-.key {
-  min-width: 34px;
-  text-align: center;
-  font-weight: 700;
-  font-size: 13px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.10);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  transition: background 0.05s, transform 0.05s;
-}
-.key.active {
-  background: #2f6df6;
-  transform: translateY(1px);
-  border-color: #6ea0ff;
-}
-
-.hint { font-size: 12px; opacity: 0.7; }

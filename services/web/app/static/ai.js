@@ -31,8 +31,11 @@ const AI = (() => {
 
   const canvas = document.getElementById("detections");
   const ctx = canvas.getContext("2d");
-  const aiBadge = document.getElementById("ai");
-  const trackBadge = document.getElementById("track");
+  // The former left HUD (#ai / #track badges) was removed; AI/track state is
+  // shown beside the crosshair (#cp-ai / #cp-track). A no-op stub keeps the
+  // write-only badge assignments below harmless when the element is absent.
+  const aiBadge = document.getElementById("ai") || { textContent: "", className: "" };
+  const trackBadge = document.getElementById("track") || { textContent: "", className: "" };
   // Crosshair-side squares (mirror the badges next to the reticle).
   const aiBox = document.getElementById("cp-ai");
   const aiBoxLabel = aiBox && aiBox.querySelector(".cp-ai-label");
