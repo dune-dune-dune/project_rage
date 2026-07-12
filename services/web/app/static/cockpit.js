@@ -147,22 +147,48 @@ document.addEventListener("keyup", (e) => {
   }
 });
 
-// Fail-safe: losing focus releases everything (safety stays as last set, but
-// with no motion/fire the next deadman tick neutralises the turret anyway).
-window.addEventListener("blur", () => {
+// Fail-safe: losing focus or hiding the tab releases motion/fire (safety stays
+// as last set). The heartbeat below keeps flowing while the tab is merely
+// backgrounded, so the turret HOLDS its current position (ENABLE stays on)
+// instead of dropping — it only neutralises if the browser is really gone.
+function releaseControls() {
   intent.up = intent.down = intent.left = intent.right = intent.fire = false;
   dirty = true;
+}
+window.addEventListener("blur", releaseControls);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) releaseControls();
 });
 
-// Push on change and as a heartbeat so the backend deadman knows we are alive.
-// sendInput() routes over the WebSocket when open, else POST (see above).
+// Push on change so control feels responsive when the tab is visible.
 setInterval(() => {
   if (dirty) {
     dirty = false;
     sendInput();
   }
 }, 50);
-setInterval(sendInput, 150); // heartbeat
+
+// Heartbeat so the backend deadman knows we are alive. Driven by a dedicated Web
+// Worker whose timers are NOT throttled in a background tab — a plain
+// setInterval here would be clamped to >=1 s when the tab is hidden, starving
+// the 400 ms deadman and dropping the turret's position hold. Falls back to a
+// main-thread interval (throttled in the background) if the worker can't load.
+const HEARTBEAT_MS = 150;
+// Version-stamp the worker URL so a code change busts its (aggressive) cache.
+const HEARTBEAT_WORKER_URL =
+  "/static/heartbeat-worker.js" +
+  (window.__ASSET_VERSION__ ? "?v=" + window.__ASSET_VERSION__ : "");
+let heartbeatWorker = null;
+try {
+  heartbeatWorker = new Worker(HEARTBEAT_WORKER_URL);
+  heartbeatWorker.onmessage = (e) => {
+    if (e.data && e.data.type === "tick") sendInput();
+  };
+  heartbeatWorker.postMessage({ type: "start", intervalMs: HEARTBEAT_MS });
+} catch (_) {
+  heartbeatWorker = null;
+}
+if (!heartbeatWorker) setInterval(sendInput, HEARTBEAT_MS); // fallback (bg-throttled)
 
 // ---------------------------------------------------------------------- HUD
 // The former bottom-left HUD (#safety / #firemode / #speed badges) was removed;

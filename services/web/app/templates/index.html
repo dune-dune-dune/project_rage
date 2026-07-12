@@ -234,6 +234,7 @@
     window.__SPEED__ = {{ speed | tojson }};
     window.__AI__ = {{ ai | tojson }};
     window.__MAP__ = {{ map_settings | tojson }};
+    window.__ASSET_VERSION__ = {{ asset_version | tojson }};
   </script>
   <!-- ONNX Runtime Web is imported inside ai-worker.js (off the main thread). -->
   <!-- ?v=… busts the browser cache so code changes always take effect. -->

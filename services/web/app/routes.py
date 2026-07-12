@@ -73,7 +73,7 @@ def _asset_version() -> int:
     """
     static = current_app.static_folder or ""
     latest = 0
-    for name in ("ai.js", "ai-worker.js", "cockpit.js", "cockpit.css", "map.js"):
+    for name in ("ai.js", "ai-worker.js", "cockpit.js", "cockpit.css", "map.js", "heartbeat-worker.js"):
         try:
             latest = max(latest, int(os.path.getmtime(os.path.join(static, name))))
         except OSError:

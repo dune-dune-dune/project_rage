@@ -48,7 +48,7 @@ project_rage/
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
 │   │   ├── app/{__init__,config,turret,routes,ws,store,wsgi}.py  # factory, settings, control, routes, /api/ws, JSON stores
-│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,map.js,compass.js,cockpit.css}  # video + HUD + YOLO (worker) + map/gauges + compass + PIN login
+│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,heartbeat-worker.js,map.js,compass.js,cockpit.css}  # video + HUD + YOLO (worker) + bg-tab heartbeat worker + map/gauges + compass + PIN login
 │   │   ├── app/static/vendor/  # onnxruntime-web (fetch_ort.sh) + leaflet/ (fetch_leaflet.sh)
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # one-off: best.pt→best.onnx, fetch ORT web, vendor Leaflet
 │   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws)
@@ -223,6 +223,15 @@ model. In brief:
   (`_POSITION_LEAD_RAD`, 90°) when moving (`turret.py:_axis_position`); until the turret reports an angle
   it falls back to the old ±π scheme. A separate **velocity soft-start** ramp (`[control] ramp_ms`,
   default 250 ms) smooths the 0→full velocity step (auto-track bypasses it) — a nicety, not the jerk fix.
+  **Background-tab position hold:** the 150 ms control heartbeat runs in a dedicated Web Worker
+  (`static/heartbeat-worker.js`), whose timers are **not** throttled when the tab is backgrounded. A
+  plain main-thread `setInterval` is clamped to ≥1 s in a hidden tab, which starved the 400 ms deadman
+  and dropped `ENABLE` — the turret then de-energised and sagged off its aim point when the operator
+  switched tabs. The worker keeps feeding the deadman so the turret **holds position** while hidden
+  (motion/fire are zeroed on `blur`/`visibilitychange`, so it is a pure hold); if the browser really
+  closes/crashes the worker dies with the page and the deadman still neutralises as before. The worker
+  URL is `?v=`-stamped from `asset_version` (workers cache aggressively). Falls back to a
+  (bg-throttled) main-thread interval if the worker cannot be created.
   **Control input transport:** the browser sends intent via `POST /api/input` (reliable default). A
   WebSocket path **`/api/ws`** (flask-sock) exists server-side but is **OFF by default** on the client
   (`USE_WS=false` in `cockpit.js`) pending real-hardware validation — a half-open WS can report
