@@ -467,7 +467,25 @@ async function connectCamera(index) {
   const pc = new RTCPeerConnection({});
   pcs[index] = pc;
   pc.addTransceiver("video", { direction: "recvonly" });
-  pc.ontrack = (ev) => { videoEl.srcObject = ev.streams[0]; };
+  pc.ontrack = (ev) => {
+    videoEl.srcObject = ev.streams[0];
+    // Minimise the WebRTC playout buffer for low-latency teleop. Over the VPN
+    // (WAN RTT ~90 ms) the browser otherwise grows a ~0.5-1 s jitter buffer,
+    // which is the perceived video lag. Path jitter here is tiny (~4 ms), so a
+    // small target is safe. jitterBufferTarget is the modern API (Chrome/Edge);
+    // playoutDelayHint is the legacy fallback. Unsupported browsers keep default.
+    try {
+      const r =
+        ev.receiver ||
+        pc.getReceivers().find((x) => x.track && x.track.kind === "video");
+      if (r) {
+        if ("jitterBufferTarget" in r) r.jitterBufferTarget = 80; // ms
+        else if ("playoutDelayHint" in r) r.playoutDelayHint = 0.08; // seconds
+      }
+    } catch (e) {
+      /* best-effort: keep default buffering on unsupported browsers */
+    }
+  };
   pc.onconnectionstatechange = () => {
     if (index === camIndex) paintVideo(pc.connectionState);
   };
