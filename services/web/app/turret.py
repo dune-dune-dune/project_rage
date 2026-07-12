@@ -56,6 +56,29 @@ _LINK_STALE_SECONDS = 1.0
 # When the source IP is not yet configured, retry the socket bind on this cadence.
 _OPEN_RETRY_SECONDS = 1.0
 
+# Serial rangefinder (Benewake TF03-180): a cached distance older than this is
+# stale (the TF03 streams at ~100 Hz), and the serial port is retried on this
+# cadence when it cannot be opened or errors out.
+_LIDAR_STALE_SECONDS = 1.0
+_LIDAR_OPEN_RETRY_SECONDS = 1.0
+
+
+def parse_tf03_frame(frame: bytes) -> int | None:
+    """Parse one 9-byte Benewake TF03 UART frame, returning distance in mm.
+
+    Standard TF03/TFmini serial frame: ``0x59 0x59`` header, little-endian
+    distance (cm) and signal strength, temperature, then a 1-byte checksum equal
+    to the low byte of the sum of the first eight bytes. Returns ``None`` for a
+    malformed header/checksum or a zero distance (out-of-range / no target)."""
+    if len(frame) != 9 or frame[0] != 0x59 or frame[1] != 0x59:
+        return None
+    if (sum(frame[0:8]) & 0xFF) != frame[8]:
+        return None
+    distance_cm = frame[2] | (frame[3] << 8)
+    if distance_cm == 0:
+        return None
+    return distance_cm * 10
+
 
 @dataclass
 class _Intent:
@@ -137,6 +160,15 @@ class TurretController:
         self._amp_x: float | None = None
         self._amp_y: float | None = None
 
+        # Serial rangefinder (Benewake TF03-180) distance in mm, populated by a
+        # dedicated reader thread when settings.rangefinder_enabled. Guarded by
+        # self._lock; None/stale until a valid frame arrives. Kept separate from
+        # the turret's own distance_mm so the snapshot() source can be selected
+        # per deployment (LiDAR on the Jetson, turret status reply otherwise).
+        self._lidar_distance_mm: int | None = None
+        self._lidar_last_monotonic = 0.0
+        self._lidar_thread: threading.Thread | None = None
+
         # State owned exclusively by the sender thread — no lock needed for these.
         self._next_sequence = 0
         self._fire_seq = 0
@@ -168,6 +200,16 @@ class TurretController:
         self._thread.start()
         log.info("Turret sender thread started at %d Hz", self._s.send_rate_hz)
 
+        if self._s.rangefinder_enabled:
+            self._lidar_thread = threading.Thread(
+                target=self._run_lidar_loop, name="tf03-lidar", daemon=True
+            )
+            self._lidar_thread.start()
+            log.info(
+                "TF03 rangefinder reader thread started on %s @ %d baud",
+                self._s.rangefinder_port, self._s.rangefinder_baud,
+            )
+
     def _try_open_channel(self, now: float) -> None:
         """Attempt to open the UDP channel; record a clear error on failure."""
         self._next_open_attempt = now + _OPEN_RETRY_SECONDS
@@ -198,9 +240,76 @@ class TurretController:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+        if self._lidar_thread is not None:
+            self._lidar_thread.join(timeout=2.0)
         if self._channel is not None:
             self._channel.close()
             self._channel = None
+
+    # ----------------------------------------------------------------- rangefinder
+    def _run_lidar_loop(self) -> None:
+        """Read the serial rangefinder and cache the latest distance.
+
+        Runs in its own daemon thread so a blocking serial read never stalls the
+        20 Hz command cadence. pyserial is imported lazily so the app still boots
+        without it when the rangefinder is disabled. On any serial error the port
+        is closed and reopened after a short delay."""
+        try:
+            import serial  # pyserial; only needed when the rangefinder is enabled.
+        except ModuleNotFoundError:
+            log.error(
+                "RANGEFINDER_ENABLED but pyserial is not installed; rangefinder "
+                "disabled. Add pyserial to requirements.txt."
+            )
+            return
+
+        port = self._s.rangefinder_port
+        baud = self._s.rangefinder_baud
+        ser = None
+        logged_error = False
+        while not self._stop_event.is_set():
+            if ser is None:
+                try:
+                    ser = serial.Serial(port, baud, timeout=0.2)
+                    logged_error = False
+                    log.info("TF03 rangefinder open on %s @ %d baud", port, baud)
+                except (OSError, serial.SerialException) as exc:
+                    if not logged_error:
+                        log.error("Cannot open rangefinder %s: %s", port, exc)
+                        logged_error = True
+                    self._stop_event.wait(_LIDAR_OPEN_RETRY_SECONDS)
+                    continue
+            try:
+                # Sync on the 0x59 0x59 header, then read the 7-byte frame body.
+                if ser.read(1) != b"\x59":
+                    continue
+                if ser.read(1) != b"\x59":
+                    continue
+                body = ser.read(7)
+                if len(body) != 7:
+                    continue
+                distance_mm = parse_tf03_frame(b"\x59\x59" + body)
+                if distance_mm is not None:
+                    now = time.monotonic()
+                    with self._lock:
+                        self._lidar_distance_mm = distance_mm
+                        self._lidar_last_monotonic = now
+            except (OSError, serial.SerialException) as exc:
+                if not logged_error:
+                    log.error("Rangefinder read error on %s: %s", port, exc)
+                    logged_error = True
+                try:
+                    ser.close()
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
+                ser = None
+                self._stop_event.wait(_LIDAR_OPEN_RETRY_SECONDS)
+
+        if ser is not None:
+            try:
+                ser.close()
+            except Exception:  # noqa: BLE001 - best-effort cleanup
+                pass
 
     # --------------------------------------------------------------------- input
     def apply_input(self, payload: dict) -> None:
@@ -531,6 +640,20 @@ class TurretController:
             input_age_ms = int((now - self._last_input_monotonic) * 1000)
             deadman_active = now - self._last_input_monotonic > self._s.deadman_seconds
             track_active = self._aim_active and now - self._last_aim_monotonic <= self._s.aim_timeout_seconds
+            lidar_mm = self._lidar_distance_mm
+            lidar_age = now - self._lidar_last_monotonic
+
+        # Rangefinder source: the serial TF03 (Jetson) when enabled — only while
+        # its reading is fresh, else None so the HUD shows "—"; otherwise fall
+        # back to the turret's own status-reply distance.
+        if self._s.rangefinder_enabled:
+            distance_m = (
+                round(lidar_mm / 1000.0, 2)
+                if lidar_mm is not None and lidar_age <= _LIDAR_STALE_SECONDS
+                else None
+            )
+        else:
+            distance_m = None if self._cur_distance_mm is None else round(self._cur_distance_mm / 1000.0, 2)
         return {
             "dry_run": self._s.dry_run,
             "safety_off": intent.safety_off,
@@ -554,7 +677,7 @@ class TurretController:
             "angle_rot_deg": self._angle_deg(self._cur_rotation_p),
             "angle_ele_deg": self._angle_deg(self._cur_elevation_p),
             # Turret health/telemetry (None until the relevant reply arrives).
-            "distance_m": None if self._cur_distance_mm is None else round(self._cur_distance_mm / 1000.0, 2),
+            "distance_m": distance_m,
             "battery_percent": self._bat_percent,
             "battery_voltage": self._bat_voltage,
             "motor_temp": {"x": self._temp_x, "y": self._temp_y},

@@ -22,6 +22,15 @@ The root [`compose.yaml`](../compose.yaml) defines only `video_gateway`. The web
 Flask cockpit (host networking, to bind `RWS_SRC_IP:RWS_SRC_PORT` and reach the turret) and a
 `video_gateway`. `rws_bridge` still runs directly on the host.
 
+**Deploy targets.** *Local laptop (macOS)* — Docker Desktop has no host networking, so only
+`video_gateway` runs in Docker and the cockpit runs natively (`run-native.sh`). *Production (Jetson, Linux)*
+— **everything runs in Docker**: the CI job [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml)
+connects over WireGuard, SSHes in, `git reset --hard`, and runs `docker compose` with
+`COMPOSE_FILE=docker-compose.yml:docker-compose.jetson.yml`. The
+[`docker-compose.jetson.yml`](../services/web/docker-compose.jetson.yml) override adds the Benewake
+TF03-180 serial rangefinder (`devices: /dev/ttyUSB0` + `RANGEFINDER_ENABLED=true`) — the only piece that
+exists in production but not locally.
+
 ---
 
 ## Control path
@@ -76,6 +85,16 @@ Key properties of the cockpit's `TurretController` ([`services/web/app/turret.py
   `battery_voltage`, `motor_temp{x,y}`, `motor_current{x,y}`) and the HUD renders them as badges. Scales
   follow docs/protocol.md (voltage ×0.01, battery raw/0xFFFF); temperature (raw °C) and current (assumed
   ×0.01 A) scales are undocumented — adjust in `_update_telemetry_from_reply` if real readings look off.
+- **Serial rangefinder (Benewake TF03-180).** On the Jetson a USB LiDAR is wired to `/dev/ttyUSB0`. A
+  dedicated `TurretController` daemon thread (`_run_lidar_loop`, started only when `RANGEFINDER_ENABLED`)
+  opens the serial port (`pyserial`, imported lazily; retries on open/read errors), syncs on the `0x59 0x59`
+  header and parses the standard 9-byte TF03 UART frame (`parse_tf03_frame`: header + little-endian distance
+  in cm + strength + temperature + 1-byte checksum). It runs independently of the 20 Hz command loop so a
+  blocking read never stalls control. `snapshot()` then serves `distance_m` from this reading **while fresh**
+  (`_LIDAR_STALE_SECONDS = 1 s`, else `null` → HUD shows `—`). When `RANGEFINDER_ENABLED` is false (local),
+  `distance_m` falls back to the turret's own status-reply `distance_mm`. The frontend is unchanged — the
+  crosshair panel's `#cp-dist` already renders `distance_m`. The device is passed into the container by
+  [`docker-compose.jetson.yml`](../services/web/docker-compose.jetson.yml) (`devices: /dev/ttyUSB0`).
 - **Velocity soft-start.** A secondary nicety (not the jerk fix): manual velocity is slew-rate limited,
   ramping toward the target by `accel_per_tick` each tick over `[control] ramp_ms` (default 250 ms). The
   reference ramps velocity too (see the `idle_*_idle` captures). `ramp_ms=0` disables it. Auto-track
@@ -234,6 +253,9 @@ Deployment/network/secrets come from `.env` (see [`.env.example`](../services/we
 | RWS dst (turret) IP/port | `RWS_DST_IP` / `RWS_DST_PORT` | `192.168.88.56` / `7780` |
 | Dry-run (do not transmit) | `RWS_DRY_RUN` | `true` |
 | Checksum salt file (32 B) | `RWS_SALT_FILE` | empty → built-in salt |
+| Rangefinder enable (TF03-180) | `RANGEFINDER_ENABLED` | `false` (Jetson: `true` via `docker-compose.jetson.yml`) |
+| Rangefinder serial port | `RANGEFINDER_PORT` | `/dev/ttyUSB0` |
+| Rangefinder serial baud | `RANGEFINDER_BAUD` | `115200` |
 | Gunicorn bind | `WEB_BIND` | `0.0.0.0:8000` |
 | Gunicorn workers / threads | `GUNICORN_WORKERS` / `GUNICORN_THREADS` | `1` / `8` |
 | Log level | `LOG_LEVEL` | `info` |

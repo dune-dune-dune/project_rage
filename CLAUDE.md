@@ -57,6 +57,7 @@ project_rage/
 │   │   ├── settings.toml     # control tuning (rates, ramp_ms, axes, fire, speed_levels, [track] AI servo) — NOT secrets
 │   │   ├── .env.example       # network/deploy env template incl. COCKPIT_PIN/SECRET_KEY (user creates .env)
 │   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + video_gateway
+│   │   ├── docker-compose.jetson.yml # prod override: /dev/ttyUSB0 rangefinder passthrough + RANGEFINDER_ENABLED
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
 └── research/
     └── reverse_protocol/
@@ -93,6 +94,10 @@ python3 test_rws_control.py --dry-run --verbose --packet-limit 5
 # Web cockpit (Flask + Gunicorn). Copy services/web/.env.example → services/web/.env first.
 # Linux (full stack in Docker):
 cd services/web && docker compose up --build          # cockpit :8000 + video_gateway :8889
+# Jetson / production (everything in Docker + TF03 rangefinder passthrough):
+cd services/web && COMPOSE_FILE=docker-compose.yml:docker-compose.jetson.yml \
+  docker compose up -d --build                        # adds /dev/ttyUSB0 + RANGEFINDER_ENABLED
+#   (this is exactly what .github/workflows/deploy.yml runs over WireGuard+SSH.)
 # macOS/Windows (Docker Desktop has no host networking → cockpit cannot bind the RWS
 # source IP in a container). Run video in Docker, cockpit natively on the host:
 cd services/web && docker compose up video_gateway    # video only
@@ -128,7 +133,9 @@ bottom edge (the video stays full-size behind it, so crosshair/AI aim geometry i
 just above it. Azimuth/elevation are no longer shown in the bar but still cached (`lastAzDeg`/`lastElDeg`)
 for the map widgets. A small **crosshair status panel** (`#cross-panel`, a child of `#crosshair` so it
 tracks the reticle offset) sits at the crosshair's lower-right and shows the rangefinder distance
-(`#cp-dist`) plus the camera lens type (`#cp-camtype`: CAM 95 → Ширококутна, CAM 96 → Вузькокутна via
+(`#cp-dist`, from `/api/status.distance_m`; on the Jetson this is the serial **Benewake TF03-180**
+LiDAR — see below — otherwise the turret's own status-reply distance) plus the camera lens type
+(`#cp-camtype`: CAM 95 → Ширококутна, CAM 96 → Вузькокутна via
 `cameraKind`) and digital zoom (`#cp-zoom`). Below the camera line a `#cp-state` row shows four boxed
 indicators in order **safety · AI · track · fire-mode**: a **safety padlock** (`#cp-safety`: closed+green
 outline when safe, open+red outline when armed — synced to `s.safety_off` in `pollStatus`, which also
@@ -229,6 +236,14 @@ model. In brief:
 - **AI auto-track** runs client-side (`ai.js`, ONNX Runtime Web); the server only receives the resulting
   aim velocity via `/api/track` and applies it as a velocity override (aim-only — never touches `arm`/`fire`).
   A dedicated aim timeout (`[track].aim_timeout_ms`, default 500 ms) zeroes the aim if the browser stalls.
+- **Serial rangefinder (Benewake TF03-180):** on the Jetson a USB LiDAR streams distance over serial. A
+  dedicated `TurretController` reader thread (`turret.py:_run_lidar_loop`, `pyserial` imported lazily) parses
+  the standard 9-byte TF03 UART frames (`parse_tf03_frame`) and caches the distance; `snapshot()` then serves
+  it as `distance_m` (only while fresh — `_LIDAR_STALE_SECONDS = 1 s`, else `null → "—"`). It is gated by
+  `RANGEFINDER_ENABLED` (env, default off) with `RANGEFINDER_PORT` (default `/dev/ttyUSB0`) and
+  `RANGEFINDER_BAUD` (default 115200); when disabled (local), `distance_m` falls back to the turret status
+  reply. The device is passed into the container by `docker-compose.jetson.yml` — a separate serial reader,
+  independent of the 20 Hz command loop, so a blocking read never stalls control.
 
 ## Known gaps (do not assume these work)
 
@@ -243,6 +258,9 @@ Details in [docs/architecture.md#known-gaps](docs/architecture.md#known-gaps).
 4. Web cockpit video is off unless `WHEP_URL` is set in `.env` and `video_gateway` + cameras are reachable.
 5. `.claude/settings.local.json` registers hooks `.claude/hooks/guard-bash.sh` / `guard-read.sh`, but
    `.claude/hooks/` does not exist.
+6. The rangefinder is bound to the fixed device path `/dev/ttyUSB0` (`docker-compose.jetson.yml`). USB
+   enumeration order is not guaranteed across reboots/replugs — if a second USB-serial device appears the
+   TF03 may land on `ttyUSB1`. Consider a stable `udev` symlink later; for now confirm the path on the Jetson.
 
 This list is a summary — the full, detailed gaps + safety caveats live in
 [docs/architecture.md](docs/architecture.md#known-gaps).

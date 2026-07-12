@@ -1,0 +1,126 @@
+name: Deploy to Server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy Application
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install WireGuard
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard wireguard-tools
+
+      - name: Setup WireGuard VPN
+        run: |
+          echo "${{ secrets.WIREGUARD_CONFIG }}" | sudo tee /etc/wireguard/wg0.conf > /dev/null
+          sudo chmod 600 /etc/wireguard/wg0.conf
+          sudo wg-quick up wg0
+
+          # Wait for WireGuard to establish connection
+          sleep 5
+
+          # Verify connection
+          sudo wg show
+
+      - name: Deploy via SSH
+        id: deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            # Перехід до директорії проєкту
+            cd ${{ secrets.PROJECT_PATH }}
+
+            # Підтягування останніх змін з Git
+            echo "📥 Syncing with GitHub..."
+            git fetch origin
+            git reset --hard origin/${{ github.ref_name }}
+
+            # Продакшн-стек кокпіта живе в services/web. Базовий compose + jetson-
+            # оверрайд (проброс /dev/ttyUSB0 дальноміра + RANGEFINDER_ENABLED).
+            # .env — untracked, тож git reset --hard його не чіпає; має існувати.
+            cd services/web
+            export COMPOSE_FILE=docker-compose.yml:docker-compose.jetson.yml
+
+            # Збірка оновлених образів
+            echo "🔨 Building Docker images..."
+            docker compose build
+
+            # Перезапуск контейнерів (кокпіт + video_gateway)
+            echo "🔄 Restarting containers..."
+            docker compose down
+            docker compose up -d --remove-orphans
+
+            # Очікування запуску сервісів
+            echo "⏳ Waiting for services to start..."
+            sleep 10
+
+            # Перевірка статусу контейнерів
+            echo "✅ Checking containers status..."
+            docker compose ps
+
+            # Показати останні логи
+            echo "📋 Recent logs:"
+            docker compose logs --tail=30
+
+            echo "🎉 Deployment completed successfully!"
+
+      - name: Cleanup WireGuard
+        if: always()
+        run: |
+          sudo wg-quick down wg0 || true
+
+      - name: Send success notification to Slack
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          REPO_URL: ${{ github.event.repository.html_url }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg repo "$REPO" \
+            --arg branch "$BRANCH" \
+            --arg actor "$ACTOR" \
+            --arg sha "$SHA" \
+            --arg url "$REPO_URL" \
+            --arg run_id "$RUN_ID" \
+            '{text: "✅ *Деплой успішно завершено!*\n\n📦 Репозиторій: `\($repo)`\n🌿 Гілка: `\($branch)`\n👤 Автор: \($actor)\n📝 Commit: <\($url)/commit/\($sha)|\($sha[0:7])>\n🔗 <\($url)/actions/runs/\($run_id)|Переглянути workflow>\n\n🎉 Проєкт успішно оновлено на сервері!"}')
+
+          curl -X POST -H 'Content-Type: application/json' \
+            --data "$PAYLOAD" \
+            "$SLACK_WEBHOOK_URL"
+
+      - name: Send failure notification to Slack
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          REPO_URL: ${{ github.event.repository.html_url }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          PAYLOAD=$(jq -n \
+            --arg repo "$REPO" \
+            --arg branch "$BRANCH" \
+            --arg actor "$ACTOR" \
+            --arg sha "$SHA" \
+            --arg url "$REPO_URL" \
+            --arg run_id "$RUN_ID" \
+            '{text: "❌ *Деплой завершився з помилкою!*\n\n📦 Репозиторій: `\($repo)`\n🌿 Гілка: `\($branch)`\n👤 Автор: \($actor)\n📝 Commit: <\($url)/commit/\($sha)|\($sha[0:7])>\n🔗 <\($url)/actions/runs/\($run_id)|Переглянути помилку>\n\n⚠️ Будь ласка, перевірте логи для деталей."}')
+
+          curl -X POST -H 'Content-Type: application/json' \
+            --data "$PAYLOAD" \
+            "$SLACK_WEBHOOK_URL"

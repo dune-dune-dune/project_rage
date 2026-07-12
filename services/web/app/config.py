@@ -55,6 +55,13 @@ class Settings:
     dry_run: bool
     salt: bytes
 
+    # --- Rangefinder (Benewake TF03-180, serial) ---
+    # Only enabled on the Jetson (production), where the LiDAR is wired to a USB
+    # serial port. When disabled, distance falls back to the turret status reply.
+    rangefinder_enabled: bool
+    rangefinder_port: str
+    rangefinder_baud: int
+
     # --- Video ---
     # List of {"label": str, "url": str} for the TAB camera switcher.
     cameras: list[dict]
@@ -224,6 +231,9 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         dst_port=_env_int("RWS_DST_PORT", 7780),
         dry_run=_env_bool("RWS_DRY_RUN", True),
         salt=_load_salt(),
+        rangefinder_enabled=_env_bool("RANGEFINDER_ENABLED", False),
+        rangefinder_port=os.environ.get("RANGEFINDER_PORT", "/dev/ttyUSB0"),
+        rangefinder_baud=_env_int("RANGEFINDER_BAUD", 115200),
         cameras=_build_cameras(video),
         send_rate_hz=int(control.get("send_rate_hz", 20)),
         deadman_ms=int(control.get("deadman_ms", 400)),

@@ -1,0 +1,24 @@
+# Jetson (production) overrides for docker-compose.yml.
+#
+# Everything runs in Docker on the Jetson (Linux host networking works there).
+# This override adds the one thing that only exists in production: the Benewake
+# TF03-180 serial rangefinder on /dev/ttyUSB0. It is NOT in the base compose so a
+# local `docker compose up` never fails on a missing device.
+#
+# Deploy (see .github/workflows/deploy.yml):
+#   cd services/web
+#   export COMPOSE_FILE=docker-compose.yml:docker-compose.jetson.yml
+#   docker compose up -d --build
+name: rws_cockpit
+
+services:
+  cockpit:
+    # Pass the USB serial rangefinder through to the container. Compatible with
+    # the base service's network_mode: host; the container runs as root so it can
+    # open the tty.
+    devices:
+      - "/dev/ttyUSB0:/dev/ttyUSB0"
+    environment:
+      RANGEFINDER_ENABLED: "true"
+      RANGEFINDER_PORT: "/dev/ttyUSB0"
+      RANGEFINDER_BAUD: "115200"

@@ -2,3 +2,4 @@ flask>=3.0
 flask-sock>=0.7          # WebSocket control-input channel (works with gthread worker)
 gunicorn>=21.2
 python-dotenv>=1.0
+pyserial>=3.5            # Benewake TF03-180 serial rangefinder (Jetson only; imported lazily)
