@@ -133,12 +133,16 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "Digit5" || e.code === "Numpad5") {
     intent.camera_mode = !intent.camera_mode; dirty = true; e.preventDefault(); return;
   }
-  // Number keys 1..N pick the rotation-speed level (top row and numpad).
+  // Number keys 1..N pick the rotation-speed level (top row and numpad):
+  // 1 = 100%, 2 = 50%, 3 = 1% (fine aim). Picking a level also clears the key-4
+  // hardware slow mode — the two are competing ways to slow the turret down, and
+  // leaving `slow` latched would silently scale the level the operator just chose.
   const digit = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
   if (digit) {
     const n = parseInt(digit[1], 10);
     if (n >= 1 && n <= SPEED.levels.length) {
       intent.speed_level = n;
+      intent.slow = false;
       dirty = true;
       e.preventDefault();
     }

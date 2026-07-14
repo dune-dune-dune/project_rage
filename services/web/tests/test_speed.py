@@ -20,24 +20,24 @@ def _rotation_v(controller, level):
     return packet.rotation_v
 
 
-def test_lower_level_gives_smaller_velocity(controller):
-    v1 = _rotation_v(controller, 1)  # 50%
-    v2 = _rotation_v(controller, 2)  # 100%
-    assert 0 < v1 < v2
+def test_levels_descend_with_the_key_number(controller):
+    """Key 1 = 100%, key 2 = 50%, key 3 = 1% — faster keys sit on lower digits."""
+    v1 = _rotation_v(controller, 1)  # 100%
+    v2 = _rotation_v(controller, 2)  # 50%
+    v3 = _rotation_v(controller, 3)  # 1%
+    assert 0 < v3 < v2 < v1
 
 
 def test_fine_level_is_slowest_but_still_moves(controller):
     """Level 3 (1%) must command a real, non-zero velocity — not a rounded-to-0 one."""
-    v3 = _rotation_v(controller, 3)  # 1%
-    assert 0 < v3 < _rotation_v(controller, 1)
     # 0.8 (axis unit) * 1.00 (global) * 0.01 (level) * 0x7FFF
-    assert v3 == 262
+    assert _rotation_v(controller, 3) == 262
 
 
 def test_default_speed_level_is_fastest(controller):
     levels = controller._s.speed_levels
     level = controller.snapshot()["speed_level"]
-    # NOT the last entry: the fine-aim level lives at the end (key `3`).
+    # An argmax, not the last entry — the list is ordered by key, not by speed.
     assert levels[level - 1] == max(levels)
 
 

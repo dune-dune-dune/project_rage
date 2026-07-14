@@ -114,11 +114,13 @@ python3 services/rws_bridge/src/main.py                                # bridge,
 ```
 
 **Cockpit keys:** `WASD` = momentary move (hold to move; **always available, not gated by safety**),
-`1`/`2`/`3` = rotation-speed level (velocity multiplier from `[control] speed_levels` = `[50, 100, 1]`:
-`1` = 50 %, `2` = 100 %, `3` = **1 % fine aim**; the boot default is the *fastest* level, i.e. the highest
-percent — **not** the last entry, so the fine level can sit at the end of the list and still land on key
-`3`; auto-track is unaffected), `4` = toggle **SLOW/precise** mode (`FLAGS1_SLOW`; hardware
-slow-motion, gates nothing), `5` = toggle **camera-drive mode** (while on, W/S steer the physical
+`1`/`2`/`3` = rotation-speed level (velocity multiplier from `[control] speed_levels` = `[100, 50, 1]`:
+`1` = **100 % (boot default)**, `2` = 50 %, `3` = **1 % fine aim**; the default is an *argmax* over the
+list — `Settings.default_speed_index` — not its last entry, so the list can be ordered by key rather than
+by speed; auto-track is unaffected). Pressing any of `1`/`2`/`3` **clears the key-4 SLOW mode**
+(`cockpit.js` zeroes `intent.slow`): the two are competing ways to slow the turret, and a latched `slow`
+would silently scale the level the operator just picked. `4` = toggle **SLOW/precise** mode
+(`FLAGS1_SLOW`; hardware slow-motion, gates nothing), `5` = toggle **camera-drive mode** (while on, W/S steer the physical
 camera axis `cameras_p` at `[camera] rate_deg_s`, clamped to `min_deg`..`max_deg`, and the turret
 elevation holds; aim-only), `F` = safety toggle (**gates firing only**),
 `Space` = hold to fire, `Shift` = hold to **range-find** (edge-paced `rangefinder_seq`, spacing
@@ -258,7 +260,8 @@ model. In brief:
   worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. A 7-digit-PIN
   login gate (`COCKPIT_PIN` in `.env`) protects all routes except `/healthz`/`/login`/static.
   Rotation speed is switchable at runtime with keys `1`/`2`/`3` (`speed_level` on `/api/input`, levels from
-  `[control] speed_levels`; the boot default is the highest percent, `Settings.default_speed_index`). The one-time **jerk at movement start** was traced to the position channel:
+  `[control] speed_levels` = `[100, 50, 1]`; the boot default is the highest percent,
+  `Settings.default_speed_index`; choosing a level also clears the key-4 `slow` flag). The one-time **jerk at movement start** was traced to the position channel:
   the cockpit used to toggle the `ROT_P`/`ELE_P` valid bits off→on and jump the target 0→±π on the first
   move packet. It now mirrors the reference — **P valid bits stay on continuously**, holding the turret's
   *current* angle (read from status replies) when idle and leading it by a modest amount

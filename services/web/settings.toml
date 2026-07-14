@@ -10,11 +10,12 @@ speed_percent = 100      # global speed scale, 10..100
 # the edge-triggered rangefinder_seq on the command stream (NOT the serial TF03).
 rangefinder_measure_interval_ms = 250
 # Rotation-speed levels (percent) selectable with keys 1..N. Multiplies manual
-# motion velocity. Auto-track ignores it. The list need NOT be sorted: the boot
-# default is the *highest* percent, so level 3 (1 %, fine aim) can live at the
-# end — where it maps to key `3` — without becoming the startup speed.
-#   key 1 = 50 %   key 2 = 100 % (default)   key 3 = 1 % (fine aim)
-speed_levels = [50, 100, 1]
+# motion velocity. Auto-track ignores it. The boot default is the *highest*
+# percent (an argmax, not the last entry), so the list order is free to follow
+# the key layout:
+#   key 1 = 100 % (default)   key 2 = 50 %   key 3 = 1 % (fine aim)
+# Picking any of these also clears the key-4 hardware slow mode.
+speed_levels = [100, 50, 1]
 
 [axes]
 # Normalised velocity amplitudes (0..1) per axis.

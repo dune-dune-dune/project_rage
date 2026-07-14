@@ -317,7 +317,7 @@ Control **tuning** lives separately in [`settings.toml`](../services/web/setting
 stdlib `tomllib`, mounted read-only into the container so it can be edited without a rebuild):
 `[control]` send_rate_hz (20), deadman_ms (400), ramp_ms (250, velocity soft-start; 0 disables),
 speed_percent (100), `speed_levels` (percent list
-selectable with keys 1..N, default `[50, 100, 1]`); `[axes]` rotation/elevation unit
+selectable with keys 1..N, default `[100, 50, 1]`); `[axes]` rotation/elevation unit
 amplitudes; `[fire]` mode + short/medium durations; `[track]` AI visual-servo `gain` (2.5), `deadzone`
 (0.02), `max_velocity` (0.5), `aim_timeout_ms` (500), `imgsz` (640, must match the ONNX export).
 
@@ -330,11 +330,14 @@ to the app rather than the blueprint. `POST /login` compares the PIN with
 
 **Rotation-speed levels:** keys `1`/`2`/`3` post `speed_level` on `/api/input`; the controller multiplies
 manual-motion velocity by `speed_levels[level-1]/100` (auto-track is unaffected — it has its own
-`max_velocity` cap). With the default `[50, 100, 1]`, key `3` is a **1 % fine-aim level** (0.8 × 0.01 →
-int16 262 — small, but well clear of zero; the parser's floor is 1 %, not 10 %). The boot default is the
-level with the **highest percent** (`Settings.default_speed_index`), *not* the last entry — that is what
-lets the fine level sit at the end of the list, where it maps to key `3`, without the cockpit starting on
-a turret that barely moves.
+`max_velocity` cap). The default `[100, 50, 1]` maps key `1` → 100 %, key `2` → 50 %, key `3` → a **1 %
+fine-aim level** (0.8 × 0.01 → int16 262 — small, but well clear of zero; the parser's floor is 1 %, not
+10 %). The boot default is the level with the **highest percent** (`Settings.default_speed_index`), an
+argmax rather than the last entry, so the list can be ordered by key instead of by speed.
+
+Picking any level also **clears the key-4 `slow` flag** (`FLAGS1_SLOW`) client-side: both are ways to slow
+the turret, and a latched hardware SLOW would keep scaling down the level the operator just selected. The
+server does not enforce this — the browser owns the intent and simply stops sending `slow: true`.
 
 **Instant camera switching:** the client pre-connects a persistent `RTCPeerConnection` + its own
 `<video>` per camera at load (STUN dropped — LAN candidates are local); `TAB` only flips which
