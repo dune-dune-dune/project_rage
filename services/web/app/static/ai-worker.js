@@ -35,6 +35,10 @@ let backendNote = "";
 // plain http:// LAN origin, which is exactly how the cockpit is normally served.
 // Name that case explicitly — it is the difference between "your GPU is unsupported"
 // (nothing to do) and "serve this over HTTPS/localhost" (a fixable config).
+function errText(err) {
+  return String((err && err.message) || err);
+}
+
 function webgpuBlockedReason() {
   if (typeof navigator === "undefined" || !navigator.gpu) {
     return self.isSecureContext
@@ -49,11 +53,14 @@ self.onmessage = async (e) => {
 
   if (m.type === "init") {
     imgsz = m.imgsz || 640;
-    // Serve the .wasm from our own vendor dir (no CDN), single-threaded: WASM
-    // threads would need COOP/COEP cross-origin isolation, which the cockpit does
-    // not set. This binary is both the WebGPU backend's dependency and the CPU
-    // fallback.
-    ort.env.wasm.wasmPaths = "/static/vendor/";
+    // wasmPaths is deliberately NOT set: the bundle resolves its .wasm/.mjs relative
+    // to itself (import.meta.url = /static/vendor/), which is exactly where
+    // fetch_ort.sh puts them. Setting a string prefix instead sends ORT down a path
+    // that fetches the loader .mjs by name — a 404 there fails initWasm(), and since
+    // WebGPU (JSEP) is built ON the WASM runtime, that kills BOTH backends.
+    //
+    // Single-threaded: WASM threads need COOP/COEP cross-origin isolation, which the
+    // cockpit does not set.
     ort.env.wasm.numThreads = 1;
 
     backend = "wasm";
@@ -65,9 +72,9 @@ self.onmessage = async (e) => {
         session = await ort.InferenceSession.create(m.modelUrl, { executionProviders: ["webgpu"] });
         backend = "webgpu";
       } catch (err) {
-        // A GPU that reports itself but cannot run the graph (unsupported op,
-        // driver refusal): keep AI alive on WASM rather than failing the mode.
-        backendNote = "WebGPU не піднявся: " + String((err && err.message) || err);
+        // A GPU that reports itself but cannot run the graph (unsupported op, driver
+        // refusal): keep AI alive on the CPU rather than failing the whole mode.
+        backendNote = "WebGPU не піднявся: " + errText(err);
         session = null;
       }
     }
@@ -76,7 +83,11 @@ self.onmessage = async (e) => {
       try {
         session = await ort.InferenceSession.create(m.modelUrl, { executionProviders: ["wasm"] });
       } catch (err) {
-        self.postMessage({ type: "error", message: String((err && err.message) || err) });
+        // ORT caches a failed initWasm() and reports every later attempt as
+        // "previous call to 'initWasm()' failed", which hides the real cause. If the
+        // WebGPU attempt already died, ITS message is the one worth showing.
+        const cause = backendNote || errText(err);
+        self.postMessage({ type: "error", message: cause });
         return;
       }
     }

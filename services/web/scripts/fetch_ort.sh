@@ -24,11 +24,19 @@ mkdir -p "${VENDOR}"
 # build is an ES module, not a classic importScripts bundle):
 #
 #   ort.webgpu.bundle.min.mjs        WebGPU **and** WASM execution providers in one
-#                                    self-contained module (the "bundle" variant
-#                                    inlines the loader, so no extra .mjs fetch).
-#   ort-wasm-simd-threaded.jsep.wasm the WASM binary it needs — used both as the
-#                                    WebGPU backend's own dependency and as the CPU
-#                                    fallback. `wasmPaths` in ai-worker.js points here.
+#                                    module.
+#   ort-wasm-simd-threaded.jsep.wasm the WASM binary. It backs BOTH providers —
+#                                    WebGPU (JSEP) is built on top of it — so if this
+#                                    file cannot load, *neither* backend comes up.
+#   ort-wasm-simd-threaded.jsep.mjs  its loader glue. Fetch it even though the bundle
+#                                    inlines a copy: some resolution paths still import
+#                                    it by name, and a 404 here fails initWasm() and
+#                                    thus the whole engine.
+#
+# The worker resolves all of these RELATIVE TO ITSELF (import.meta.url), so they must
+# sit next to ort.webgpu.bundle.min.mjs in this directory. It deliberately does NOT set
+# ort.env.wasm.wasmPaths — a string prefix there sends ORT down a path that fetches the
+# .mjs by hand and is easy to get subtly wrong.
 #
 # NOTE: WebGPU needs a SECURE CONTEXT — navigator.gpu does not exist on a plain
 # http:// LAN origin, so the worker silently falls back to WASM and says so in the
@@ -36,6 +44,7 @@ mkdir -p "${VENDOR}"
 FILES=(
   "ort.webgpu.bundle.min.mjs"
   "ort-wasm-simd-threaded.jsep.wasm"
+  "ort-wasm-simd-threaded.jsep.mjs"
 )
 
 for f in "${FILES[@]}"; do
