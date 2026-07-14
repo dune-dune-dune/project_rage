@@ -14,8 +14,9 @@ import os
 from flask import Flask
 
 from .config import load_settings
+from .db import SettingsDb, import_legacy_json
 from .routes import bp
-from .store import AiSettingsStore, CrosshairStore, MapSettingsStore
+from .store import AiSettingsStore, CrosshairStore, MapSettingsStore, NetworkStore
 from .turret import TurretController
 from .ws import sock
 
@@ -43,15 +44,24 @@ def create_app() -> Flask:
     if not settings.pin:
         log.warning("COCKPIT_PIN not set: the cockpit is served WITHOUT authentication")
 
+    # Settings storage: apply the SQL migrations, then import any pre-SQLite JSON
+    # files. Both must run before the stores, which read a table that does not
+    # exist until the migrations have run.
+    db = SettingsDb(settings.db_file)
+    db.migrate()
+    import_legacy_json(db, settings)
+
     controller = TurretController(settings)
     controller.start()
     atexit.register(controller.stop)
 
     app.config["SETTINGS"] = settings
     app.config["TURRET"] = controller
-    app.config["CROSSHAIR"] = CrosshairStore(settings.crosshair_file)
-    app.config["AI_SETTINGS"] = AiSettingsStore(settings.ai_settings_file)
-    app.config["MAP_SETTINGS"] = MapSettingsStore(settings.map_settings_file)
+    app.config["DB"] = db
+    app.config["CROSSHAIR"] = CrosshairStore(db)
+    app.config["AI_SETTINGS"] = AiSettingsStore(db)
+    app.config["MAP_SETTINGS"] = MapSettingsStore(db)
+    app.config["NETWORK"] = NetworkStore(db)
     app.register_blueprint(bp)
     sock.init_app(app)  # /api/ws control channel (auth via the same before_request gate)
     return app

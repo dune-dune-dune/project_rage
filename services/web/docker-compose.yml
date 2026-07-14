@@ -26,7 +26,8 @@ services:
     volumes:
       # Live-editable control tuning without rebuilding the image.
       - ./settings.toml:/app/settings.toml:ro
-      # Persist runtime data (crosshair position) across restarts.
+      # Persist runtime data across restarts/rebuilds: the settings database
+      # (cockpit.db — crosshair, AI, map, video profiles) and the ONNX model.
       - ./data:/app/data
     depends_on:
       - video_gateway
@@ -36,7 +37,12 @@ services:
     image: bluenviron/mediamtx:1.18.2-ffmpeg
     restart: unless-stopped
     environment:
-      MTX_WEBRTCADDITIONALHOSTS: ${VIDEO_GATEWAY_HOST_IP:-}
+      # ICE hosts MediaMTX advertises to the browser. BOTH the LAN and the VPN
+      # address are listed, so the cockpit's local/remote video switch (⚙ ->
+      # Налаштування мережі) needs no container restart. The Jetson's .env is
+      # never rewritten by the deploy, so this default is what production uses —
+      # keep the literals correct.
+      MTX_WEBRTCADDITIONALHOSTS: ${MEDIAMTX_HOSTS:-192.168.88.33,10.20.100.1}
     ports:
       - "8889:8889"        # WebRTC / WHEP signaling
       - "8189:8189/udp"    # WebRTC local UDP media

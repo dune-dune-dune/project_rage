@@ -6,7 +6,9 @@ services:
     image: bluenviron/mediamtx:1.18.2-ffmpeg
     restart: unless-stopped
     environment:
-      MTX_WEBRTCADDITIONALHOSTS: ${VIDEO_GATEWAY_HOST_IP:-}
+      # ICE hosts advertised to the browser: turret LAN + VPN. See
+      # services/web/docker-compose.yml for why both are listed.
+      MTX_WEBRTCADDITIONALHOSTS: ${MEDIAMTX_HOSTS:-192.168.88.33,10.20.100.1}
     ports:
       # - "8888:8888" --- HLS is disabled, so this is not needed.
       - "8889:8889"

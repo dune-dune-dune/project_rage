@@ -23,6 +23,20 @@ TEST_PIN = "1234567"
 TEST_SECRET = "test-secret-key-please-ignore"
 
 
+@pytest.fixture(autouse=True)
+def isolated_data_dir(tmp_path, monkeypatch):
+    """Point COCKPIT_DATA_DIR at a per-test tmp dir.
+
+    Without this every test would migrate and write the real
+    services/web/data/cockpit.db — the operator's live crosshair/AI/map settings.
+    Tests that need the path themselves can just re-setenv it (monkeypatch wins:
+    ``_set_env`` below deliberately does not touch this variable).
+    """
+    data_dir = tmp_path / "data"
+    monkeypatch.setenv("COCKPIT_DATA_DIR", str(data_dir))
+    return data_dir
+
+
 def _set_env(pin: str, dry_run: bool) -> None:
     os.environ["RWS_DRY_RUN"] = "true" if dry_run else "false"
     os.environ["COCKPIT_PIN"] = pin

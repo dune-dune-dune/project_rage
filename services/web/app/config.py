@@ -1,11 +1,17 @@
 """Configuration for the Flask turret cockpit.
 
-Two layers of settings are intentionally kept separate:
+Three layers of settings are intentionally kept separate:
 
-* Deployment / network / secrets  -> environment variables (``.env``).
-* Control tuning (axis speeds, fire) -> ``settings.toml`` committed to the repo.
+* Deployment / turret network / secrets -> environment variables (``.env``).
+* Control tuning (axis speeds, fire)     -> ``settings.toml`` committed to the repo.
+* Operator-tunable runtime settings      -> SQLite (:mod:`app.db` + :mod:`app.store`):
+  crosshair, AI thresholds, map origin and the video/network profiles. These are
+  editable from the cockpit UI and must NOT be re-added here — the video gateway
+  address used to live in ``.env`` (``WHEP_URL`` / ``VIDEO_GATEWAY_HOST_IP``),
+  which meant a redeploy just to move between the turret LAN and the VPN.
 
-Both are merged into a single immutable :class:`Settings` object at startup.
+The first two are merged into a single immutable :class:`Settings` object at
+startup; the third is read per request from the database.
 """
 
 from __future__ import annotations
@@ -62,10 +68,6 @@ class Settings:
     rangefinder_port: str
     rangefinder_baud: int
 
-    # --- Video ---
-    # List of {"label": str, "url": str} for the TAB camera switcher.
-    cameras: list[dict]
-
     # --- Control tuning (settings.toml) ---
     send_rate_hz: int
     deadman_ms: int
@@ -74,8 +76,10 @@ class Settings:
     ramp_ms: int
     speed_percent: int
     # Discrete rotation-speed levels (percent) selectable with keys 1..N. Each is
-    # a multiplier applied to the manual-motion velocity; the last level is the
-    # default (fastest). See TurretController._build_packet.
+    # a multiplier applied to the manual-motion velocity. The list is NOT assumed
+    # to be sorted — the boot default is the *highest* percent (see
+    # `default_speed_index`), so a fine-aim level can be appended without making
+    # it the level the cockpit starts on. See TurretController._build_packet.
     speed_levels: tuple[float, ...]
     rotation_v_unit: float
     elevation_v_up_unit: float
@@ -102,6 +106,11 @@ class Settings:
     secret_key: str
 
     # --- Persistence ---
+    # SQLite file holding every operator-tunable setting (crosshair, AI, map,
+    # video/network profiles). Schema: app/migrations/*.sql.
+    db_file: str
+    # Pre-SQLite JSON files. Kept only as the source of the one-time import into
+    # the database (app.db.import_legacy_json), which renames them afterwards.
     crosshair_file: str
     ai_settings_file: str
     map_settings_file: str
@@ -133,6 +142,17 @@ class Settings:
     def aim_timeout_seconds(self) -> float:
         return self.aim_timeout_ms / 1000.0
 
+    @property
+    def default_speed_index(self) -> int:
+        """Index of the level the cockpit boots on: the fastest one.
+
+        Deliberately an argmax, not ``len - 1``: the fine-aim level (1%) sits at
+        the end of the list so it lands on key `3`, and booting into it would
+        leave the operator with a turret that looks dead.
+        """
+        levels = self.speed_levels
+        return max(range(len(levels)), key=levels.__getitem__)
+
 
 def load_env_file() -> None:
     """Load services/web/.env into the environment for native (non-Docker) runs.
@@ -153,8 +173,10 @@ def load_env_file() -> None:
 def _parse_speed_levels(raw: object) -> tuple[float, ...]:
     """Coerce the [control] speed_levels list into clamped percent multipliers.
 
-    Each entry is clamped to 10..100. Falls back to (50.0, 100.0) when the value
-    is missing, not a list, or yields no valid entries.
+    Each entry is clamped to 1..100 — the floor is 1 %, not 10 %, so a fine-aim
+    level exists at all (1 % of full scale is int16 262, well above zero). Falls
+    back to (50.0, 100.0) when the value is missing, not a list, or yields no
+    valid entries.
     """
     default = (50.0, 100.0)
     if not isinstance(raw, (list, tuple)):
@@ -165,7 +187,7 @@ def _parse_speed_levels(raw: object) -> tuple[float, ...]:
             value = float(item)
         except (TypeError, ValueError):
             continue
-        levels.append(max(10.0, min(100.0, value)))
+        levels.append(max(1.0, min(100.0, value)))
     return tuple(levels) if levels else default
 
 
@@ -186,34 +208,6 @@ def _load_toml(path: Path) -> dict:
         return tomllib.load(handle)
 
 
-def _build_cameras(video: dict) -> list[dict]:
-    """Build the [{label, url}] camera list for the TAB switcher.
-
-    The gateway base comes from WHEP_BASE, else is derived from WHEP_URL, else
-    from VIDEO_GATEWAY_HOST_IP. Stream paths/labels come from settings.toml.
-    Falls back to a single camera from WHEP_URL when no streams are configured.
-    """
-    whep_url = os.environ.get("WHEP_URL", "").strip()
-    base = os.environ.get("WHEP_BASE", "").strip().rstrip("/")
-    if not base and whep_url:
-        # http://host:8889/cam95_h264/whep -> http://host:8889
-        base = whep_url.rsplit("/", 2)[0]
-    if not base:
-        ip = os.environ.get("VIDEO_GATEWAY_HOST_IP", "192.168.88.33").strip() or "192.168.88.33"
-        base = f"http://{ip}:8889"
-
-    cameras: list[dict] = []
-    for entry in video.get("streams", []):
-        path = str(entry.get("path", "")).strip()
-        if not path:
-            continue
-        cameras.append({"label": str(entry.get("label", path)), "url": f"{base}/{path}/whep"})
-
-    if not cameras and whep_url:
-        cameras.append({"label": "CAM", "url": whep_url})
-    return cameras
-
-
 def load_settings(settings_path: Path | None = None) -> Settings:
     """Build the merged, immutable settings object read once at startup."""
     load_env_file()
@@ -221,7 +215,6 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     control = toml.get("control", {})
     axes = toml.get("axes", {})
     fire = toml.get("fire", {})
-    video = toml.get("video", {})
     track = toml.get("track", {})
 
     return Settings(
@@ -234,7 +227,6 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         rangefinder_enabled=_env_bool("RANGEFINDER_ENABLED", False),
         rangefinder_port=os.environ.get("RANGEFINDER_PORT", "/dev/ttyUSB0"),
         rangefinder_baud=_env_int("RANGEFINDER_BAUD", 115200),
-        cameras=_build_cameras(video),
         send_rate_hz=int(control.get("send_rate_hz", 20)),
         deadman_ms=int(control.get("deadman_ms", 400)),
         ramp_ms=int(control.get("ramp_ms", 250)),
@@ -253,6 +245,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         ai_imgsz=int(track.get("imgsz", 640)),
         pin=os.environ.get("COCKPIT_PIN", "").strip(),
         secret_key=os.environ.get("SECRET_KEY", "").strip(),
+        db_file=str(_data_file("cockpit.db")),
         crosshair_file=str(_data_file("crosshair.json")),
         ai_settings_file=str(_data_file("ai_settings.json")),
         map_settings_file=str(_data_file("map_settings.json")),

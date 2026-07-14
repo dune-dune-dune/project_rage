@@ -26,16 +26,26 @@ def test_lower_level_gives_smaller_velocity(controller):
     assert 0 < v1 < v2
 
 
+def test_fine_level_is_slowest_but_still_moves(controller):
+    """Level 3 (1%) must command a real, non-zero velocity — not a rounded-to-0 one."""
+    v3 = _rotation_v(controller, 3)  # 1%
+    assert 0 < v3 < _rotation_v(controller, 1)
+    # 0.8 (axis unit) * 1.00 (global) * 0.01 (level) * 0x7FFF
+    assert v3 == 262
+
+
 def test_default_speed_level_is_fastest(controller):
-    snap = controller.snapshot()
-    assert snap["speed_level"] == snap["speed_levels"]  # last (fastest) level
+    levels = controller._s.speed_levels
+    level = controller.snapshot()["speed_level"]
+    # NOT the last entry: the fine-aim level lives at the end (key `3`).
+    assert levels[level - 1] == max(levels)
 
 
 def test_invalid_speed_level_is_ignored(controller):
-    top = controller.snapshot()["speed_levels"]
+    default = controller.snapshot()["speed_level"]
     for bad in (0, 99, "2", 1.5, True):
         controller.apply_input({"speed_level": bad})
-        assert controller.snapshot()["speed_level"] == top
+        assert controller.snapshot()["speed_level"] == default
 
 
 def test_valid_speed_level_is_applied(controller):

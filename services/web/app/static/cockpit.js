@@ -382,9 +382,9 @@ applyCrosshair();
 
 // ------------------------------------------------------ settings menu (top-left)
 // One button toggles a dropdown; each dropdown item opens exactly one settings
-// panel (map / crosshair / AI / alerts) with mutual exclusion. Panel contents
-// and their own handlers live in this file (crosshair), ai.js (AI) and map.js
-// (map origin) — the controller only shows/hides.
+// panel (map / crosshair / AI / network / alerts) with mutual exclusion. Panel
+// contents and their own handlers live in this file (crosshair, network), ai.js
+// (AI) and map.js (map origin) — the controller only shows/hides.
 (function initMenu() {
   const menuBtn = document.getElementById("menu-btn");
   const dropdown = document.getElementById("menu-dropdown");
@@ -393,6 +393,7 @@ applyCrosshair();
     map: document.getElementById("map-settings-form"),
     crosshair: document.getElementById("crosshair-panel"),
     ai: document.getElementById("ai-panel"),
+    network: document.getElementById("network-panel"),
     alerts: document.getElementById("alerts-panel"),
   };
   const panelEls = Object.values(panels).filter(Boolean);
@@ -439,6 +440,96 @@ applyCrosshair();
     if (panelEls.some((p) => p.contains(e.target))) return;
     closeAll();
   });
+})();
+
+// ---------------------------------------------------------- network settings
+// Which video gateway the browser pulls WHEP from: the turret LAN ("local") or
+// the VPN ("remote"). Server-side (SQLite) rather than per-browser, so the
+// cockpit comes up in the right mode after a reload/redeploy.
+//
+// Saving reloads the page on purpose: connectCamera() builds one <video> + one
+// RTCPeerConnection per camera at load, so new URLs only apply to a fresh
+// document. The server rejects a malformed host/path by keeping the previous
+// value — we diff the echoed settings against what was typed and refuse to
+// reload if anything was dropped, otherwise a typo would silently do nothing.
+(function initNetworkPanel() {
+  const panel = document.getElementById("network-panel");
+  const saveBtn = document.getElementById("net-save");
+  if (!panel || !saveBtn) return;
+
+  const fields = {
+    local: {
+      host: document.getElementById("net-local-host"),
+      cams: [document.getElementById("net-local-cam95"), document.getElementById("net-local-cam96")],
+    },
+    remote: {
+      host: document.getElementById("net-remote-host"),
+      cams: [document.getElementById("net-remote-cam95"), document.getElementById("net-remote-cam96")],
+    },
+  };
+  const modeInputs = panel.querySelectorAll('input[name="video-mode"]');
+  const note = panel.querySelector(".sp-note");
+  const noteText = note ? note.innerHTML : "";
+
+  function fill(cfg) {
+    if (!cfg || typeof cfg !== "object") return;
+    for (const mode of ["local", "remote"]) {
+      const profile = cfg[mode];
+      if (!profile) continue;
+      fields[mode].host.value = profile.host || "";
+      (profile.streams || []).forEach((stream, i) => {
+        if (fields[mode].cams[i]) fields[mode].cams[i].value = stream.path || "";
+      });
+    }
+    modeInputs.forEach((input) => { input.checked = input.value === cfg.video_mode; });
+  }
+
+  function read() {
+    const active = panel.querySelector('input[name="video-mode"]:checked');
+    const payload = { video_mode: active ? active.value : "local" };
+    for (const mode of ["local", "remote"]) {
+      payload[mode] = {
+        host: fields[mode].host.value.trim(),
+        streams: fields[mode].cams.map((el) => ({ path: el.value.trim() })),
+      };
+    }
+    return payload;
+  }
+
+  // True when the server stored exactly what was typed (nothing was rejected).
+  function accepted(sent, saved) {
+    if (sent.video_mode !== saved.video_mode) return false;
+    return ["local", "remote"].every((mode) =>
+      sent[mode].host === saved[mode].host &&
+      sent[mode].streams.every((s, i) => s.path === saved[mode].streams[i].path));
+  }
+
+  saveBtn.addEventListener("click", async () => {
+    const payload = read();
+    saveBtn.disabled = true;
+    try {
+      const res = await fetch("/api/network-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const saved = await res.json();
+      if (!accepted(payload, saved)) {
+        fill(saved);
+        if (note) note.innerHTML = "Невірна адреса або назва потоку — значення відхилено.";
+        saveBtn.disabled = false;
+        return;
+      }
+      location.reload();
+    } catch (err) {
+      if (note) note.innerHTML = "Не вдалося зберегти: " + err.message;
+      saveBtn.disabled = false;
+    }
+  });
+
+  panel.addEventListener("input", () => { if (note) note.innerHTML = noteText; });
+  fill(window.__NETWORK__);
 })();
 
 // -------------------------------------------------------------- WHEP video

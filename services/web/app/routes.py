@@ -64,6 +64,10 @@ def _map_settings():
     return current_app.config["MAP_SETTINGS"]
 
 
+def _network():
+    return current_app.config["NETWORK"]
+
+
 def _asset_version() -> int:
     """A cache-busting version stamp = newest mtime of the JS/CSS assets.
 
@@ -73,7 +77,10 @@ def _asset_version() -> int:
     """
     static = current_app.static_folder or ""
     latest = 0
-    for name in ("ai.js", "ai-worker.js", "cockpit.js", "cockpit.css", "map.js", "heartbeat-worker.js"):
+    for name in (
+        "ai.js", "ai-worker.js", "cockpit.js", "cockpit.css",
+        "map.js", "compass.js", "heartbeat-worker.js",
+    ):
         try:
             latest = max(latest, int(os.path.getmtime(os.path.join(static, name))))
         except OSError:
@@ -108,9 +115,14 @@ def _ai_config(settings) -> dict:
 @bp.get("/")
 def index():
     settings = current_app.config["SETTINGS"]
+    # ?video=local|remote overrides the saved profile for this page load only.
+    # Recovery hatch: saving an unreachable gateway host reloads the cockpit into
+    # a config whose video is dead, and the settings panel lives inside it.
+    override = request.args.get("video")
     return render_template(
         "index.html",
-        cameras=settings.cameras,
+        cameras=_network().cameras(override),
+        network=_network().load(),
         dry_run=settings.dry_run,
         crosshair=_crosshair().load(),
         map_settings=_map_settings().load(),
@@ -185,6 +197,23 @@ def api_map_settings_get():
 def api_map_settings_set():
     payload = request.get_json(silent=True) or {}
     return jsonify(_map_settings().save(payload))
+
+
+@bp.get("/api/network-settings")
+def api_network_settings_get():
+    return jsonify(_network().load())
+
+
+@bp.post("/api/network-settings")
+def api_network_settings_set():
+    """Save the video gateway profiles / active mode.
+
+    The client reloads the page afterwards: the camera <video> elements and their
+    RTCPeerConnections are built once at load, so the new URLs only take effect
+    on a fresh document.
+    """
+    payload = request.get_json(silent=True) or {}
+    return jsonify(_network().save(payload))
 
 
 @bp.post("/api/track")

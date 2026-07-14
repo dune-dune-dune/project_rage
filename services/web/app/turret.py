@@ -120,9 +120,10 @@ class TurretController:
         self._intent = _Intent()
         self._fire_mode = settings.fire_mode if settings.fire_mode in _FIRE_MODES else "short"
         # Rotation-speed level as a 0-based index into settings.speed_levels.
-        # Defaults to the last (fastest) level so behaviour is unchanged until the
-        # operator picks a slower level with keys 1..N.
-        self._speed_index = len(settings.speed_levels) - 1
+        # Defaults to the FASTEST level (highest percent, not the last entry) so
+        # the fine-aim level can sit at the end of the list — where it maps to
+        # key `3` — without the cockpit booting into a turret that barely moves.
+        self._speed_index = settings.default_speed_index
         self._last_input_monotonic = 0.0
 
         # --- Auto-track (visual servo) aim override, set from POST /api/track. ---

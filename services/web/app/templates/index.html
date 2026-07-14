@@ -65,7 +65,7 @@
     </div>
   </div>
 
-  <!-- Top-left settings menu: one button → dropdown → four settings panels.
+  <!-- Top-left settings menu: one button → dropdown → the settings panels.
        Consolidates the former top-right ⚙ (crosshair + AI) and the on-map ⚙
        (map origin) into a single entry point. Opening/closing + mutual
        exclusion are wired in cockpit.js. -->
@@ -74,6 +74,7 @@
     <button class="menu-item" type="button" data-panel="map">Налаштування мапи</button>
     <button class="menu-item" type="button" data-panel="crosshair">Налаштування прицілу</button>
     <button class="menu-item" type="button" data-panel="ai">Налаштування ШІ моделі</button>
+    <button class="menu-item" type="button" data-panel="network">Налаштування мережі</button>
     <button class="menu-item" type="button" data-panel="alerts">Налаштування алертів</button>
   </div>
 
@@ -125,6 +126,53 @@
       <input id="map-north-corr" type="number" step="1" min="0" max="360" value="0" />
     </label>
     <button id="map-save" type="button">Зберегти</button>
+  </div>
+
+  <!-- Network settings: which video gateway the browser pulls WHEP from.
+       "Локальне" = turret LAN, "Віддалено" = WireGuard VPN. Saving reloads the
+       page, because the <video> elements + RTCPeerConnections are built once at
+       load (see cockpit.js). -->
+  <div id="network-panel" class="menu-panel" hidden>
+    <div class="sp-title">Відеопотік</div>
+    <div class="np-modes">
+      <label class="np-mode">
+        <input type="radio" name="video-mode" value="local" /> Локальне
+      </label>
+      <label class="np-mode">
+        <input type="radio" name="video-mode" value="remote" /> Віддалено
+      </label>
+    </div>
+
+    <div class="sp-title">Локальне (мережа турелі)</div>
+    <label>IP шлюзу
+      <input id="net-local-host" type="text" spellcheck="false" placeholder="192.168.88.33" />
+    </label>
+    <div class="mps-row">
+      <label>Потік CAM 95
+        <input id="net-local-cam95" type="text" spellcheck="false" placeholder="cam95_h264" />
+      </label>
+      <label>Потік CAM 96
+        <input id="net-local-cam96" type="text" spellcheck="false" placeholder="cam96_h264" />
+      </label>
+    </div>
+
+    <div class="sp-title">Віддалено (VPN)</div>
+    <label>IP шлюзу
+      <input id="net-remote-host" type="text" spellcheck="false" placeholder="10.20.100.1" />
+    </label>
+    <div class="mps-row">
+      <label>Потік CAM 95
+        <input id="net-remote-cam95" type="text" spellcheck="false" placeholder="cam95_main" />
+      </label>
+      <label>Потік CAM 96
+        <input id="net-remote-cam96" type="text" spellcheck="false" placeholder="cam96_main" />
+      </label>
+    </div>
+
+    <div class="sp-note">Потоки <code>*_h264</code> транскодовані і грають у будь-якому браузері;
+      <code>*_main</code> — це H265, який поза Safari дає чорний екран. Збереження перезавантажує
+      сторінку.</div>
+    <button id="net-save" type="button">Зберегти</button>
   </div>
 
   <!-- Alerts settings (placeholder — functionality added later). -->
@@ -234,6 +282,7 @@
     window.__SPEED__ = {{ speed | tojson }};
     window.__AI__ = {{ ai | tojson }};
     window.__MAP__ = {{ map_settings | tojson }};
+    window.__NETWORK__ = {{ network | tojson }};
     window.__ASSET_VERSION__ = {{ asset_version | tojson }};
   </script>
   <!-- ONNX Runtime Web is imported inside ai-worker.js (off the main thread). -->

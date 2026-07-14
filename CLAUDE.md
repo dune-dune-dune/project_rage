@@ -47,15 +47,17 @@ project_rage/
 │   ├── rws_bridge/           # Async turret driver: WebSocket control + 20 Hz RWS loop + lease watchdog
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
-│   │   ├── app/{__init__,config,turret,routes,ws,store,wsgi}.py  # factory, settings, control, routes, /api/ws, JSON stores
+│   │   ├── app/{__init__,config,turret,routes,ws,db,store,wsgi}.py  # factory, settings, control, routes, /api/ws, SQLite, stores
+│   │   ├── app/migrations/*.sql  # schema + seed, applied once at startup (see its README)
 │   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,heartbeat-worker.js,map.js,compass.js,cockpit.css}  # video + HUD + YOLO (worker) + bg-tab heartbeat worker + map/gauges + compass + PIN login
 │   │   ├── app/static/vendor/  # onnxruntime-web (fetch_ort.sh) + leaflet/ (fetch_leaflet.sh)
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # one-off: best.pt→best.onnx, fetch ORT web, vendor Leaflet
-│   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws)
+│   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws, db, network)
 │   │   ├── requirements-dev.txt  # pytest (dev-only; runtime stays torch/pytest-free)
+│   │   ├── data/cockpit.db   # SQLite: crosshair, AI, map, video/network profiles (gitignored)
 │   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # YOLO weights (gitignored runtime data)
 │   │   ├── settings.toml     # control tuning (rates, ramp_ms, axes, fire, speed_levels, [track] AI servo) — NOT secrets
-│   │   ├── .env.example       # network/deploy env template incl. COCKPIT_PIN/SECRET_KEY (user creates .env)
+│   │   ├── .env.example       # turret-network/deploy env template incl. COCKPIT_PIN/SECRET_KEY (user creates .env)
 │   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + video_gateway
 │   │   ├── docker-compose.jetson.yml # prod override: /dev/ttyUSB0 rangefinder passthrough + RANGEFINDER_ENABLED
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
@@ -106,22 +108,26 @@ cd services/web && ./run-native.sh                    # cockpit natively (auto v
 #   - the sender retries the socket bind until RWS_SRC_IP is configured on the host.
 
 # Other services
-VIDEO_GATEWAY_HOST_IP=192.168.88.33 docker compose up video_gateway   # video (root compose)
+docker compose up video_gateway                                       # video (root compose)
+#   MediaMTX advertises both ICE hosts (LAN + VPN) by default; override with MEDIAMTX_HOSTS=a,b
 python3 services/rws_bridge/src/main.py                                # bridge, WS :8765
 ```
 
 **Cockpit keys:** `WASD` = momentary move (hold to move; **always available, not gated by safety**),
-`1`/`2` = rotation-speed level (client-side velocity multiplier from `[control] speed_levels`,
-default = fastest; auto-track is unaffected), `F` = safety toggle (**gates firing only**),
+`1`/`2`/`3` = rotation-speed level (velocity multiplier from `[control] speed_levels` = `[50, 100, 1]`:
+`1` = 50 %, `2` = 100 %, `3` = **1 % fine aim**; the boot default is the *fastest* level, i.e. the highest
+percent — **not** the last entry, so the fine level can sit at the end of the list and still land on key
+`3`; auto-track is unaffected), `F` = safety toggle (**gates firing only**),
 `Space` = hold to fire, `M` = cycle fire mode
 (short/medium/manual), `Q`/`E` = digital zoom in/out, `TAB` = cycle camera, `I` = cycle AI mode
 (**OFF → AI ON (YOLO) → AI CUSTOM → OFF**), `T` = toggle auto-track (any AI mode; aim-only, never fires).
 AI CUSTOM is a model-free pixel **motion** detector (frame differencing): pixels whose colour changes by
 more than the ⚙ threshold are clustered into blobs, and blobs exceeding the min-object-size are flagged as
-a drone. The ⚙ button (top-right) opens crosshair position settings (H/V offset,
-`services/web/data/crosshair.json` via `/api/crosshair`) and AI settings (confidence threshold default 70%,
-min object size in px, and Custom motion threshold %, `services/web/data/ai_settings.json` via
-`/api/ai-settings`). A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
+a drone. The ⚙ button (top-left) opens a dropdown of settings panels: **мапа** (`/api/map-settings`),
+**приціл** (H/V offset, `/api/crosshair`), **ШІ модель** (confidence threshold default 70 %, min object size
+in px, Custom motion threshold %, `/api/ai-settings`), **мережа** (see below) and **алерти** (placeholder).
+All of them persist to SQLite (`services/web/data/cockpit.db`), not to JSON files.
+A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
 bottom edge, styled in `cockpit.css`) shows four groups, each an SVG icon + label + value:
 battery (%+V, `#battery`, whole item pulses red under 15%), motor temps (`#motemp` X/Y),
 motor currents (`#mocur` X/Y), and a **«Статус підключення»** group with two coloured dots — turret
@@ -152,8 +158,8 @@ green on); and a **fire-mode box** (`#cp-fire` wrapping `#cp-firemode`, `data-mo
 vendored `static/vendor/leaflet/`, **online OSM tiles**) centred on a saved origin, drawing the turret's
 azimuth **sector** (radius polygon) plus a live azimuth needle; below it two square SVG gauges show the
 azimuth range and the elevation range with live needles. The map's own ⚙ (`#map-settings-btn`) flips the
-map to a settings form (only lat, lon, `north_correction`; Save → `POST /api/map-settings`,
-`services/web/data/map_settings.json`). Live angles come from `window.cockpit.azDeg`/`.elDeg` (cached by
+map to a settings form (only lat, lon, `north_correction`; Save → `POST /api/map-settings`, persisted in
+`cockpit.db`). Live angles come from `window.cockpit.azDeg`/`.elDeg` (cached by
 `pollStatus`, which calls `window.mapWidgets.update()` at 5 Hz). Bearing mapping:
 `bearing = angle_rot_deg + north_correction`.
 
@@ -166,6 +172,30 @@ via `window.compass.update(bearing)`, so it refreshes at the same 5 Hz. The azim
 `ele_min`/`ele_max` = −8…30) are **fixed constants** in the store (used to draw the sector + gauges, not
 user-editable). The AI/crosshair ⚙ button + `#settings-panel` are shifted left (`right: 292px`) so the
 map owns the corner.
+
+**Settings storage (SQLite):** every operator-tunable setting lives in `services/web/data/cockpit.db`
+(stdlib `sqlite3` — no server, no extra container, no new dependency; the file sits in the existing
+`./data` bind mount, so it survives rebuilds and the deploy's `git reset --hard`). Schema is **SQL-file
+migrations**: `services/web/app/migrations/*.sql` are applied once, in filename order, at startup
+(`app/db.py:run_migrations` from `create_app`), recorded in `schema_migrations`, and skipped forever after
+— a new setting = a new `000N_*.sql` file, nothing else. Applied files are **append-only** (the engine
+tracks names, not checksums — see `app/migrations/README.md`). The pre-SQLite `data/*.json` files are
+imported once on first boot and renamed to `*.json.migrated` (`app/db.py:import_legacy_json`).
+
+**Network settings (⚙ → «Налаштування мережі»):** picks which video gateway the *browser* pulls WHEP from
+— **локальне** (turret LAN, `192.168.88.33`, paths `cam95_h264`/`cam96_h264`) or **віддалено** (WireGuard
+VPN, `10.20.100.1`, paths `cam95_main`/`cam96_main`). Both the host and the MediaMTX stream paths are
+editable per profile (`NetworkStore` in `store.py`, `GET/POST /api/network-settings`); labels and the WHEP
+port are server-side constants, and an invalid host/path is rejected (keeps the previous value) because the
+value is interpolated into a URL the browser then POSTs its SDP to. `routes.index()` builds
+`window.__CAMERAS__` from the DB **per request**; saving reloads the page (the `<video>` elements and their
+`RTCPeerConnection`s are built once at load). Recovery hatch: **`GET /?video=local`** forces the local
+profile for one page load without saving, so a typo'd gateway cannot lock the operator out of the cockpit.
+`MTX_WEBRTCADDITIONALHOSTS` advertises **both** IPs (compose default `192.168.88.33,10.20.100.1`,
+override `MEDIAMTX_HOSTS`), so switching profiles needs no container restart. ⚠️ `cam*_main` is raw
+**H265/1080p** — outside Safari WebRTC cannot decode it (connection goes green, picture stays black); that
+is exactly why the paths are UI-editable, switch them to `cam*_h264` if the remote view is black.
+
 `ENABLE` stays on for the whole live
 session so the motors HOLD position (drops only on the deadman neutral packet); fire needs safety
 disengaged (ARMED).
@@ -215,8 +245,8 @@ model. In brief:
   (software fire interlock: `fire='F'` only when safety disengaged). 400 ms deadman, single Gunicorn
   worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. A 7-digit-PIN
   login gate (`COCKPIT_PIN` in `.env`) protects all routes except `/healthz`/`/login`/static.
-  Rotation speed is switchable at runtime with keys `1`/`2` (`speed_level` on `/api/input`, levels from
-  `[control] speed_levels`). The one-time **jerk at movement start** was traced to the position channel:
+  Rotation speed is switchable at runtime with keys `1`/`2`/`3` (`speed_level` on `/api/input`, levels from
+  `[control] speed_levels`; the boot default is the highest percent, `Settings.default_speed_index`). The one-time **jerk at movement start** was traced to the position channel:
   the cockpit used to toggle the `ROT_P`/`ELE_P` valid bits off→on and jump the target 0→±π on the first
   move packet. It now mirrors the reference — **P valid bits stay on continuously**, holding the turret's
   *current* angle (read from status replies) when idle and leading it by a modest amount
@@ -239,7 +269,8 @@ model. In brief:
   routes: `/`, `/healthz`, `/login` (GET/POST), `/logout`, `/api/input`, `/api/status`,
   `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
   `/api/ai-settings` (GET/POST conf + min size), `/api/map-settings` (GET/POST map origin lat/lon +
-  north_correction), `/assets/model.onnx`, `/assets/classes.json`;
+  north_correction), `/api/network-settings` (GET/POST video profiles + active mode),
+  `/assets/model.onnx`, `/assets/classes.json`;
   WebSocket route: `/api/ws` (control input). The PIN gate is registered app-wide
   (`before_app_request`) so it also protects `/api/ws`.
 - **AI auto-track** runs client-side (`ai.js`, ONNX Runtime Web); the server only receives the resulting
@@ -264,7 +295,11 @@ Details in [docs/architecture.md#known-gaps](docs/architecture.md#known-gaps).
    Desktop (macOS/Windows) only `RWS_DRY_RUN=true` works (the socket is never opened).
 3. `GUNICORN_WORKERS` **must stay 1** (hardcoded in the Dockerfile `CMD`). More workers = multiple UDP
    senders with independent sequence counters = corrupt command stream.
-4. Web cockpit video is off unless `WHEP_URL` is set in `.env` and `video_gateway` + cameras are reachable.
+4. Web cockpit video needs a reachable `video_gateway` + cameras at the address of the **active profile**
+   (⚙ → «Налаштування мережі», stored in `cockpit.db`). A saved-but-unreachable gateway is recoverable via
+   `GET /?video=local`. The `remote` profile defaults to `cam*_main` = **H265**, which only Safari decodes
+   over WebRTC — elsewhere the connection succeeds and the picture stays black; switch the paths to
+   `cam*_h264` in the same panel.
 5. `.claude/settings.local.json` registers hooks `.claude/hooks/guard-bash.sh` / `guard-read.sh`, but
    `.claude/hooks/` does not exist.
 6. The rangefinder is bound to the fixed device path `/dev/ttyUSB0` (`docker-compose.jetson.yml`). USB

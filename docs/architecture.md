@@ -109,7 +109,7 @@ Key properties of the cockpit's `TurretController` ([`services/web/app/turret.py
   guards `/api/ws` too.
 - **Deadman.** If no browser input arrives for `deadman_ms` (default 400 ms), the sender forces neutral.
 - **Dry-run.** `RWS_DRY_RUN=true` (default) never opens the socket; packets are built and logged only.
-- **Crosshair.** An adjustable aiming crosshair (⚙ panel) is persisted to `data/crosshair.json` via
+- **Crosshair.** An adjustable aiming crosshair (⚙ panel) is persisted to SQLite via
   `GET`/`POST /api/crosshair` for reuse by later tooling.
 - **Auto-track aim override.** When the browser auto-tracker is active it POSTs a normalised aim velocity
   to `/api/track` (`{active, rot, ele}`, each in [-1, 1]). `apply_track` stores it under the same lock and
@@ -175,7 +175,7 @@ Key T (AI on) → on each result: pick target nearest the crosshair (then neares
 - **Model conversion (one-off, offline).** `scripts/export_onnx.py` converts `data/model/best.pt` →
   `best.onnx` (+ `classes.json`) with ultralytics (`requirements-export.txt`, dev-only);
   `scripts/fetch_ort.sh` vendors onnxruntime-web into `app/static/vendor/` (served locally, no runtime CDN).
-  Detection thresholds (`conf`, `min_size`) persist to `data/ai_settings.json` via `/api/ai-settings`.
+  Detection thresholds (`conf`, `min_size`) persist to SQLite via `/api/ai-settings`.
 
 ## Video path
 
@@ -188,9 +188,30 @@ Turret cameras 192.168.88.95 / .96  (RTSP :554, streams av0_0 / av0_1 / av0_2)
   → WebRTC (media UDP :8189, STUN for ICE) → <video> element
 ```
 
-The Flask cockpit renders its WHEP URL into the page from the `WHEP_URL` env var (server-side, via
-`index.html`). If `WHEP_URL` is empty the HUD shows `NO VIDEO URL`; if the stream is unreachable it
-shows `NO SIGNAL`. Set `WHEP_URL=http://<gateway>:8889/<cam>/whep` in `.env` to enable video.
+The Flask cockpit renders the camera list into the page (`window.__CAMERAS__`) from the **active network
+profile in SQLite**, rebuilt on every `GET /` (`routes.index()` → `NetworkStore.cameras()`). It is *not* an
+env var any more: `WHEP_URL` / `WHEP_BASE` / `VIDEO_GATEWAY_HOST_IP` are gone from the app. If the stream
+is unreachable the HUD shows `NO SIGNAL`.
+
+**Local vs remote profile.** The cockpit always reaches the turret over the LAN; only the *browser* moves
+between the turret LAN and the WireGuard VPN, and it fetches WHEP straight from MediaMTX. So the gateway
+address is a two-profile setting (⚙ → «Налаштування мережі», `GET`/`POST /api/network-settings`):
+
+| profile | gateway host | default stream paths |
+| --- | --- | --- |
+| `local` | `192.168.88.33` | `cam95_h264` / `cam96_h264` |
+| `remote` | `10.20.100.1` (VPN) | `cam95_main` / `cam96_main` |
+
+Host and paths are editable per profile; labels (`CAM 95`/`CAM 96` — `cockpit.js:cameraKind()` derives the
+lens type from them) and the WHEP port (8889) are server-side constants. An invalid host/path is rejected
+and the previous value kept — the value is interpolated into a URL the browser POSTs its SDP to, so it is
+validated against `^[A-Za-z0-9.\-]{1,253}$` / `^[A-Za-z0-9_\-]{1,64}$`. Saving reloads the page, because the
+`<video>` elements and their `RTCPeerConnection`s are built once at load. **Recovery:** `GET /?video=local`
+forces the local profile for one page load without saving, so a typo'd gateway cannot lock the operator out.
+
+`MTX_WEBRTCADDITIONALHOSTS` advertises **both** hosts (compose default `192.168.88.33,10.20.100.1`,
+overridable with `MEDIAMTX_HOSTS`), so switching profiles needs no container restart — at the cost of the
+browser timing out the two dead ICE candidates on connect.
 
 **Codec note.** All camera streams are **H265/HEVC**, which only Safari (and Chrome on HEVC-capable
 hardware) can play over WebRTC. For cross-browser video the gateway exposes **H264-transcoded** paths
@@ -202,10 +223,13 @@ via ffmpeg `runOnDemand` (requires the `bluenviron/mediamtx:1.18.2-ffmpeg` image
   `-fflags nobuffer -flags low_delay`, x264 `zerolatency`, and a 0.5 s keyframe interval.
 - `cam95_h264_hd` / `cam96_h264_hd` — 1080p `av0_0`, heavier; use only with CPU headroom.
 
-The cockpit's **TAB** key cycles the `[video].streams` list from
-[`settings.toml`](../services/web/settings.toml); the WHEP base URL is derived from `WHEP_URL`
-(or `WHEP_BASE` / `VIDEO_GATEWAY_HOST_IP`). RTSP pulls use **TCP** because UDP RTP times out through
-Docker Desktop's NAT on macOS/Windows.
+⚠️ The `remote` profile defaults to `cam*_main`, i.e. the **raw H265 1080p** pull. Outside Safari the
+WebRTC connection comes up but nothing decodes (video dot green, picture black) — switch the paths to
+`cam*_h264` in the same panel if that happens.
+
+The cockpit's **TAB** key cycles the active profile's stream list (from the database, no longer from
+`settings.toml`). RTSP pulls use **TCP** because UDP RTP times out through Docker Desktop's NAT on
+macOS/Windows.
 
 ---
 
@@ -261,14 +285,37 @@ Deployment/network/secrets come from `.env` (see [`.env.example`](../services/we
 | Log level | `LOG_LEVEL` | `info` |
 | Login PIN (7 digits) | `COCKPIT_PIN` | empty → login disabled (open) |
 | Session secret | `SECRET_KEY` | empty → ephemeral key (sessions reset on restart) |
-| Video WHEP URL | `WHEP_URL` | (optional) |
-| Video gateway host IP | `VIDEO_GATEWAY_HOST_IP` | (optional) |
+| MediaMTX advertised ICE hosts | `MEDIAMTX_HOSTS` (compose only) | `192.168.88.33,10.20.100.1` |
+| Settings data dir | `COCKPIT_DATA_DIR` | `services/web/data` |
+
+The video gateway address is **not** an env var: it lives in the settings database (see *Video path*).
+`WHEP_URL` / `WHEP_BASE` / `VIDEO_GATEWAY_HOST_IP` were removed; leftover entries in an existing `.env`
+are simply ignored.
+
+### Settings database (SQLite)
+
+Everything the operator can change at runtime — crosshair offset, AI thresholds, map origin, video/network
+profiles — is stored in `data/cockpit.db` ([`db.py`](../services/web/app/db.py) +
+[`store.py`](../services/web/app/store.py)). SQLite is a library, not a server: no extra container, no new
+dependency (stdlib `sqlite3`), and the file sits in the existing `./data` bind mount, so it survives
+`docker compose down`, image rebuilds and the deploy's `git reset --hard`.
+
+- **Schema = SQL files.** `app/migrations/*.sql` are applied once, in filename order, at startup
+  (`SettingsDb.migrate()` from `create_app`), each inside one transaction together with its
+  `schema_migrations` row. Applied versions are skipped on every later boot; a failing migration rolls back
+  and aborts startup. Adding a setting = adding `000N_*.sql`. Files are **append-only** (the engine tracks
+  names, not checksums) — see `app/migrations/README.md`.
+- **Legacy import.** On the first boot the pre-SQLite `data/{crosshair,ai_settings,map_settings}.json` are
+  imported (only when the DB has no row for that section) and renamed to `*.json.migrated`, so a lost
+  `cockpit.db` cannot silently resurrect stale settings.
+- **Concurrency.** One Gunicorn worker (8 gthreads); each call opens its own short-lived connection
+  (`busy_timeout=5000`, WAL best-effort). The 20 Hz turret thread never touches the database.
 
 Control **tuning** lives separately in [`settings.toml`](../services/web/settings.toml) (read via
 stdlib `tomllib`, mounted read-only into the container so it can be edited without a rebuild):
 `[control]` send_rate_hz (20), deadman_ms (400), ramp_ms (250, velocity soft-start; 0 disables),
 speed_percent (100), `speed_levels` (percent list
-selectable with keys 1..N, default `[50, 100]`); `[axes]` rotation/elevation unit
+selectable with keys 1..N, default `[50, 100, 1]`); `[axes]` rotation/elevation unit
 amplitudes; `[fire]` mode + short/medium durations; `[track]` AI visual-servo `gain` (2.5), `deadzone`
 (0.02), `max_velocity` (0.5), `aim_timeout_ms` (500), `imgsz` (640, must match the ONNX export).
 
@@ -279,9 +326,13 @@ get `401`; `/healthz`, `/login` and static assets are public. It is registered `
 to the app rather than the blueprint. `POST /login` compares the PIN with
 `hmac.compare_digest` and sets a signed session (secret = `SECRET_KEY`). Empty `COCKPIT_PIN` = open access.
 
-**Rotation-speed levels:** keys `1`/`2` post `speed_level` on `/api/input`; the controller multiplies
+**Rotation-speed levels:** keys `1`/`2`/`3` post `speed_level` on `/api/input`; the controller multiplies
 manual-motion velocity by `speed_levels[level-1]/100` (auto-track is unaffected — it has its own
-`max_velocity` cap). Default level = the last (fastest), preserving prior behaviour.
+`max_velocity` cap). With the default `[50, 100, 1]`, key `3` is a **1 % fine-aim level** (0.8 × 0.01 →
+int16 262 — small, but well clear of zero; the parser's floor is 1 %, not 10 %). The boot default is the
+level with the **highest percent** (`Settings.default_speed_index`), *not* the last entry — that is what
+lets the fine level sit at the end of the list, where it maps to key `3`, without the cockpit starting on
+a turret that barely moves.
 
 **Instant camera switching:** the client pre-connects a persistent `RTCPeerConnection` + its own
 `<video>` per camera at load (STUN dropped — LAN candidates are local); `TAB` only flips which
@@ -297,6 +348,7 @@ HTTP routes ([`routes.py`](../services/web/app/routes.py)): `GET /` (cockpit pag
 `POST /api/input` (JSON intent incl. `speed_level` → controller, 204; active control path), `GET /api/status` (HUD snapshot,
 incl. `track_active`, `speed_level`, `speed_levels`, and turret telemetry: `angle_rot_deg`/`angle_ele_deg`,
 `distance_m`, `battery_percent`/`battery_voltage`, `motor_temp`, `motor_current`), `GET`/`POST /api/crosshair`,
+`GET`/`POST /api/network-settings` (video profiles + active mode),
 `POST /api/track` (auto-aim velocity → controller, 204),
 `GET`/`POST /api/ai-settings` (conf, min size, Custom motion threshold, ego-motion max shift),
 `GET /assets/model.onnx` (exported weights),
@@ -314,8 +366,10 @@ starts its sender thread at import time. Native host runs use
 - Published ports: `8889:8889`, `8189:8189/udp`.
 - **Compose project name is `autoantibug`** (`compose.yaml` line 1), not `project_rage` — so containers/networks
   are prefixed `autoantibug-…` (e.g. `autoantibug-video_gateway-1`). Relevant for `docker ps` / cleanup.
-- `MTX_WEBRTCADDITIONALHOSTS` fed from host env `VIDEO_GATEWAY_HOST_IP` (so WebRTC advertises the
-  right host IP for ICE — clients are not on the docker network).
+- `MTX_WEBRTCADDITIONALHOSTS` fed from `MEDIAMTX_HOSTS` (default `192.168.88.33,10.20.100.1`) so WebRTC
+  advertises the right host IPs for ICE — clients are not on the docker network, and **both** the LAN and
+  the VPN address are advertised so the cockpit's local/remote switch needs no restart. Note the Jetson's
+  `.env` is never rewritten by the deploy, so in production the compose default is what actually applies.
 - Six on-demand RTSP pulls: `cam95_main/_sub1/_sub2` from `192.168.88.95:554`, `cam96_*` from `192.168.88.96:554`
   (streams `av0_0` / `av0_1` / `av0_2`), UDP transport.
 
@@ -360,8 +414,12 @@ turret directly. The remaining gaps:
 3. **Single-worker requirement is a footgun if overridden.** The Dockerfile `CMD` hardcodes
    `--workers 1`. Raising it (or running multiple app instances) creates multiple UDP senders sharing
    one turret with independent sequence counters → corrupt/duplicated command stream. Keep it at one.
-4. **Web cockpit video off unless `WHEP_URL` is set.** The cockpit renders `WHEP_URL` into the page;
-   empty → HUD shows `NO VIDEO URL`. It also needs the `video_gateway` up and cameras reachable.
+4. **Web cockpit video depends on the active network profile.** The camera URLs come from the settings
+   database (⚙ → «Налаштування мережі»), not from `.env`. It needs the `video_gateway` up and the cameras
+   reachable *at the active profile's gateway host*. Two traps: (a) a saved-but-wrong host reloads the
+   cockpit into a config with dead video — recover with `GET /?video=local`; (b) the `remote` profile
+   defaults to `cam*_main`, which is **H265** and decodes only in Safari — elsewhere the connection
+   succeeds and the picture stays black. Switch those paths to `cam*_h264` in the same panel.
 5. **Broken Claude Code hooks.** [`.claude/settings.local.json`](../.claude/settings.local.json)
    registers PreToolUse hooks `.claude/hooks/guard-bash.sh` and `.claude/hooks/guard-read.sh`, but the
    `.claude/hooks/` directory does not exist.

@@ -282,6 +282,9 @@ html, body {
   background: rgba(0, 0, 0, 0.62);
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, 0.12);
+  /* The network panel is the tall one — keep any panel inside the viewport. */
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
 }
 .menu-panel[hidden] { display: none; }
 .menu-panel .sp-title { font-weight: 700; letter-spacing: 0.05em; font-size: 13px; }
@@ -290,7 +293,8 @@ html, body {
 .menu-panel input[type="range"] { width: 100%; }
 .menu-panel .mps-row { display: flex; gap: 8px; }
 .menu-panel .mps-row label { flex: 1; }
-.menu-panel input[type="number"] {
+.menu-panel input[type="number"],
+.menu-panel input[type="text"] {
   width: 100%;
   padding: 5px 6px;
   border-radius: 6px;
@@ -299,6 +303,18 @@ html, body {
   color: #e8f0f2;
   font-size: 12px;
 }
+.menu-panel .sp-note code { font-size: 10px; opacity: 0.9; }
+/* Network panel: local/remote radio row. Both profiles stay editable regardless
+   of which one is selected, so the operator can fix the far side before
+   switching to it. */
+.np-modes { display: flex; gap: 12px; }
+.np-mode {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+  cursor: pointer;
+}
+.np-mode input[type="radio"] { margin: 0; cursor: pointer; }
 .menu-panel button {
   padding: 8px;
   border-radius: 8px;
