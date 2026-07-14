@@ -11,16 +11,14 @@
 // quality; only the heavy compute is offloaded.
 // =============================================================================
 
-// Load the JSEP bundle, which carries BOTH the WebGPU and the WASM backend. Fall
-// back to the plain WASM build if it was never vendored (scripts/fetch_ort.sh) —
-// an old checkout must not lose AI mode entirely just because a file is missing.
-let hasWebgpuBuild = true;
-try {
-  importScripts("/static/vendor/ort.webgpu.min.js");
-} catch (_) {
-  hasWebgpuBuild = false;
-  importScripts("/static/vendor/ort.min.js");
-}
+// ORT's WebGPU build is an ES module (since 1.18), so this is a MODULE worker and
+// imports it rather than importScripts()-ing a classic bundle. The "bundle" variant
+// is self-contained: WebGPU + WASM execution providers, no extra loader fetch.
+//
+// Vendored by scripts/fetch_ort.sh. Do NOT downgrade ORT: 1.17 calls
+// adapter.requestAdapterInfo(), long removed from the WebGPU spec, so its GPU
+// backend throws on any current browser and inference falls back to the slow CPU.
+import * as ort from "/static/vendor/ort.webgpu.bundle.min.mjs";
 
 let session = null;
 let imgsz = 640;
@@ -38,7 +36,6 @@ let backendNote = "";
 // Name that case explicitly — it is the difference between "your GPU is unsupported"
 // (nothing to do) and "serve this over HTTPS/localhost" (a fixable config).
 function webgpuBlockedReason() {
-  if (!hasWebgpuBuild) return "ORT без WebGPU (запустіть scripts/fetch_ort.sh)";
   if (typeof navigator === "undefined" || !navigator.gpu) {
     return self.isSecureContext
       ? "браузер не підтримує WebGPU"
@@ -52,13 +49,12 @@ self.onmessage = async (e) => {
 
   if (m.type === "init") {
     imgsz = m.imgsz || 640;
-    // Single-threaded SIMD WASM: no COOP/COEP requirement. This is both the
-    // WebGPU build's own WASM dependency and the fallback backend.
-    if (self.ort && ort.env && ort.env.wasm) {
-      ort.env.wasm.wasmPaths = "/static/vendor/";
-      ort.env.wasm.numThreads = 1;
-      ort.env.wasm.simd = true;
-    }
+    // Serve the .wasm from our own vendor dir (no CDN), single-threaded: WASM
+    // threads would need COOP/COEP cross-origin isolation, which the cockpit does
+    // not set. This binary is both the WebGPU backend's dependency and the CPU
+    // fallback.
+    ort.env.wasm.wasmPaths = "/static/vendor/";
+    ort.env.wasm.numThreads = 1;
 
     backend = "wasm";
     backendNote = webgpuBlockedReason();

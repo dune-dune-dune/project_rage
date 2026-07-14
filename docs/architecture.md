@@ -214,8 +214,9 @@ Key T (AI on) → on each result: pick target nearest the crosshair (then neares
   cameras (95 ↔ 96) needs no server change; a switch just drops the current target lock.
 - **ONNX Runtime** is vendored once by `scripts/fetch_ort.sh` into `app/static/vendor/` (served locally,
   no runtime CDN). Detection thresholds (`conf`, `min_size`) persist to SQLite via `/api/ai-settings`.
-- **Execution provider: WebGPU, falling back to WASM.** `ai-worker.js` loads the JSEP bundle
-  (`ort.webgpu.min.js`, which carries both backends) and tries `executionProviders: ["webgpu"]` first —
+- **Execution provider: WebGPU, falling back to WASM.** `ai-worker.js` is a **module worker** importing
+  `vendor/ort.webgpu.bundle.min.mjs` (both backends in one self-contained ES module — ORT's WebGPU build
+  stopped being a classic `importScripts` bundle in 1.18) and tries `executionProviders: ["webgpu"]` first —
   that runs YOLO on the **operator's** GPU (~20–40 ms a frame) instead of one CPU core (~500 ms for a
   YOLO11s-class model, i.e. ~2 FPS, which visibly lags the tracker). It falls back to single-threaded SIMD
   WASM whenever WebGPU is unavailable, and the ⚙ panel reports which backend came up and why:
@@ -227,6 +228,10 @@ Key T (AI on) → on each result: pick target nearest the crosshair (then neares
     requires TLS on the video gateway too — the browser flag is the cheap path.
   - The GPU used is the **client's** (a MacBook's M-series GPU works via Metal in Chrome/Edge, and in
     Safari 18+). The Jetson's GPU is not involved in detection at all — it only serves the `.onnx` file.
+  - ⚠️ **ORT ≥ 1.22 is required** (`scripts/fetch_ort.sh` pins it). 1.17 calls
+    `adapter.requestAdapterInfo()`, which the WebGPU spec has since replaced with the `adapter.info`
+    property; on a current browser its GPU backend throws `no available backend found. ERR: [webgpu]
+    TypeError: r.requestAdapterInfo is not a function` and detection quietly runs on the CPU instead.
 
 ### AI model library (upload / convert / switch)
 

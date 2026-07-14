@@ -109,7 +109,9 @@ const AI = (() => {
 
     setEngine({ state: "loading", error: "", fps: 0, ms: 0 });
     // Versioned URL busts the (aggressive) worker cache after a code change.
-    worker = new Worker(cfg.worker_url || "/static/ai-worker.js");
+    // type: "module" is REQUIRED: ai-worker.js imports ORT's WebGPU build, which is
+    // an ES module — a classic worker cannot load it.
+    worker = new Worker(cfg.worker_url || "/static/ai-worker.js", { type: "module" });
     workerLoading = new Promise((resolve, reject) => {
       worker.onmessage = (e) => {
         const m = e.data;

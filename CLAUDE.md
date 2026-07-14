@@ -158,8 +158,10 @@ shows readiness explicitly: per-model status, the browser ONNX engine (`не з�
 `працює (WebGPU|WASM) — N к/с, M мс` / `помилка: …`) and whether the exporter answers. This is all
 **AI ON (YOLO)** only — **AI CUSTOM is model-free and untouched**.
 
-**Inference backend (WebGPU → WASM).** `ai-worker.js` loads the JSEP bundle (`ort.webgpu.min.js` — both
-backends in one file) and tries **WebGPU** first: YOLO then runs on the **operator's** GPU (~20–40 ms a
+**Inference backend (WebGPU → WASM).** `ai-worker.js` is a **module worker** (`new Worker(url, {type:
+"module"})`) that imports `vendor/ort.webgpu.bundle.min.mjs` — ORT's WebGPU build has been an ES module
+since 1.18, so a classic `importScripts` worker cannot load it — and tries **WebGPU** first: YOLO then runs
+on the **operator's** GPU (~20–40 ms a
 frame) instead of one CPU core (~500 ms ≈ 2 FPS for an `s`-class model, which visibly lags auto-track). It
 falls back to single-threaded SIMD WASM otherwise, and the panel reports which backend came up **and why**
 (`#ai-state-backend`). ⚠️ **WebGPU requires a secure context**: `navigator.gpu` does not exist on a plain
@@ -167,7 +169,10 @@ falls back to single-threaded SIMD WASM otherwise, and the panel reports which b
 WASM. `localhost` counts as secure; otherwise allow the origin in the browser
 (`chrome://flags/#unsafely-treat-insecure-origin-as-secure`) or serve over HTTPS (which then needs TLS on
 MediaMTX too, or the WHEP requests become mixed content). The GPU is the **client's** — the Jetson's GPU is
-never involved in detection. `scripts/export_onnx.py` still does the same conversion
+never involved in detection. ⚠️ **Do not pin ORT back below 1.22** (`scripts/fetch_ort.sh`): 1.17 calls
+`adapter.requestAdapterInfo()`, since removed from the WebGPU spec, so its GPU backend throws
+(`no available backend found … requestAdapterInfo is not a function`) on any current browser and inference
+silently drops to the ~20× slower CPU path. `scripts/export_onnx.py` still does the same conversion
 offline.
 A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
 bottom edge, styled in `cockpit.css`) shows **five** groups, each an SVG icon + label + value:
