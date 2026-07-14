@@ -520,6 +520,18 @@ applyCrosshair();
   const note = panel.querySelector(".sp-note");
   const noteText = note ? note.innerHTML : "";
 
+  // The camera <select>s are rendered from the server's stream catalogue
+  // (NetworkStore.stream_options). A path saved over the API but absent from that
+  // catalogue would otherwise be dropped by the select on the next save, silently
+  // rewriting the operator's stream — so surface it as an extra option instead.
+  function ensureOption(select, path) {
+    if (!path || select.querySelector(`option[value="${CSS.escape(path)}"]`)) return;
+    const option = document.createElement("option");
+    option.value = path;
+    option.textContent = `${path} (власний)`;
+    select.appendChild(option);
+  }
+
   function fill(cfg) {
     if (!cfg || typeof cfg !== "object") return;
     for (const mode of ["local", "remote"]) {
@@ -527,7 +539,10 @@ applyCrosshair();
       if (!profile) continue;
       fields[mode].host.value = profile.host || "";
       (profile.streams || []).forEach((stream, i) => {
-        if (fields[mode].cams[i]) fields[mode].cams[i].value = stream.path || "";
+        const select = fields[mode].cams[i];
+        if (!select) return;
+        ensureOption(select, stream.path);
+        select.value = stream.path || "";
       });
     }
     modeInputs.forEach((input) => { input.checked = input.value === cfg.video_mode; });

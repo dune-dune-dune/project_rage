@@ -90,3 +90,21 @@ def test_index_injects_cameras_for_the_active_mode(authed_client):
     # ?video=local recovers a cockpit whose saved gateway is unreachable.
     html = authed_client.get("/?video=local").get_data(as_text=True)
     assert "192.168.88.33:8889/cam95_h264/whep" in html
+
+
+def test_stream_options_offer_sd_hd_and_raw_per_camera():
+    """The ⚙ dropdowns: every offered path must exist in video_gateway/mediamtx.yml."""
+    options = NetworkStore.stream_options()
+    assert [o["path"] for o in options[0]] == ["cam95_h264", "cam95_h264_hd", "cam95_main"]
+    assert [o["path"] for o in options[1]] == ["cam96_h264", "cam96_h264_hd", "cam96_main"]
+
+
+def test_hd_streams_are_selectable(tmp_path):
+    store = _store(tmp_path)
+    store.save({
+        "local": {"streams": [{"path": "cam95_h264_hd"}, {"path": "cam96_h264_hd"}]},
+    })
+    assert store.cameras() == [
+        {"label": "CAM 95", "url": "http://192.168.88.33:8889/cam95_h264_hd/whep"},
+        {"label": "CAM 96", "url": "http://192.168.88.33:8889/cam96_h264_hd/whep"},
+    ]

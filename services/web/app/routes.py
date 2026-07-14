@@ -123,6 +123,7 @@ def index():
         "index.html",
         cameras=_network().cameras(override),
         network=_network().load(),
+        stream_options=_network().stream_options(),
         dry_run=settings.dry_run,
         crosshair=_crosshair().load(),
         map_settings=_map_settings().load(),

@@ -156,11 +156,15 @@
       <input id="net-local-host" type="text" spellcheck="false" placeholder="192.168.88.33" />
     </label>
     <div class="mps-row">
-      <label>Потік CAM 95
-        <input id="net-local-cam95" type="text" spellcheck="false" placeholder="cam95_h264" />
+      <label>Якість CAM 95
+        <select id="net-local-cam95">
+          {% for opt in stream_options[0] %}<option value="{{ opt.path }}">{{ opt.label }}</option>{% endfor %}
+        </select>
       </label>
-      <label>Потік CAM 96
-        <input id="net-local-cam96" type="text" spellcheck="false" placeholder="cam96_h264" />
+      <label>Якість CAM 96
+        <select id="net-local-cam96">
+          {% for opt in stream_options[1] %}<option value="{{ opt.path }}">{{ opt.label }}</option>{% endfor %}
+        </select>
       </label>
     </div>
 
@@ -169,16 +173,21 @@
       <input id="net-remote-host" type="text" spellcheck="false" placeholder="10.20.100.1" />
     </label>
     <div class="mps-row">
-      <label>Потік CAM 95
-        <input id="net-remote-cam95" type="text" spellcheck="false" placeholder="cam95_main" />
+      <label>Якість CAM 95
+        <select id="net-remote-cam95">
+          {% for opt in stream_options[0] %}<option value="{{ opt.path }}">{{ opt.label }}</option>{% endfor %}
+        </select>
       </label>
-      <label>Потік CAM 96
-        <input id="net-remote-cam96" type="text" spellcheck="false" placeholder="cam96_main" />
+      <label>Якість CAM 96
+        <select id="net-remote-cam96">
+          {% for opt in stream_options[1] %}<option value="{{ opt.path }}">{{ opt.label }}</option>{% endfor %}
+        </select>
       </label>
     </div>
 
-    <div class="sp-note">Потоки <code>*_h264</code> транскодовані і грають у будь-якому браузері;
-      <code>*_main</code> — це H265, який поза Safari дає чорний екран. Збереження перезавантажує
+    <div class="sp-note"><b>H264</b> грає в будь-якому браузері; <b>H265</b> декодує лише Safari
+      (деінде звʼязок є, а картинка чорна). <b>HD 1080</b> транскодується на шлюзі: якщо процесора
+      бракує, затримка почне рости — тоді поверніться на SD 640. Збереження перезавантажує
       сторінку.</div>
     <button id="net-save" type="button">Зберегти</button>
   </div>

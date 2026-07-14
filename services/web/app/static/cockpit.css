@@ -298,7 +298,8 @@ html, body {
 .menu-panel .sp-fine input[type="range"] { flex: 1; }
 .menu-panel .sp-fine input[type="number"] { width: 72px; flex: none; }
 .menu-panel input[type="number"],
-.menu-panel input[type="text"] {
+.menu-panel input[type="text"],
+.menu-panel select {
   width: 100%;
   padding: 5px 6px;
   border-radius: 6px;
@@ -307,6 +308,10 @@ html, body {
   color: #e8f0f2;
   font-size: 12px;
 }
+/* The dropdown list itself is drawn by the OS and does not inherit the panel's
+   translucent background — give the options an opaque dark one explicitly. */
+.menu-panel select { cursor: pointer; }
+.menu-panel select option { background: #12181b; color: #e8f0f2; }
 .menu-panel .sp-note code { font-size: 10px; opacity: 0.9; }
 /* Network panel: local/remote radio row. Both profiles stay editable regardless
    of which one is selected, so the operator can fix the far side before

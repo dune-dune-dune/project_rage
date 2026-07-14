@@ -232,6 +232,28 @@ _HOST_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}$")
 # MediaMTX path name (services/video_gateway/mediamtx.yml).
 _PATH_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
 
+# The stream (= video quality) catalogue offered per camera in the settings
+# dropdowns. Every path must exist in services/video_gateway/mediamtx.yml:
+#   *_h264     -> camera sub-stream av0_1 (640x480), transcoded to H264
+#   *_h264_hd  -> camera main stream av0_0 (1080p), transcoded to H264 — heavier
+#                 on the gateway CPU; if ffmpeg cannot keep up, latency grows
+#   *_main     -> camera main stream av0_0 as-is: H265, which only Safari decodes
+#                 over WebRTC (elsewhere the connection succeeds, picture is black)
+# This list only *offers* paths; save() still accepts any syntactically valid path
+# (see _merge), so a path added to mediamtx.yml later is not locked out.
+_STREAM_OPTIONS = (
+    (
+        {"path": "cam95_h264", "label": "SD 640 · H264"},
+        {"path": "cam95_h264_hd", "label": "HD 1080 · H264"},
+        {"path": "cam95_main", "label": "HD 1080 · H265 (лише Safari)"},
+    ),
+    (
+        {"path": "cam96_h264", "label": "SD 640 · H264"},
+        {"path": "cam96_h264_hd", "label": "HD 1080 · H264"},
+        {"path": "cam96_main", "label": "HD 1080 · H265 (лише Safari)"},
+    ),
+)
+
 
 class NetworkStore:
     """Video gateway profiles + the active one (local LAN vs remote VPN)."""
@@ -266,6 +288,11 @@ class NetworkStore:
             {"label": stream["label"], "url": f"http://{host}:{_WHEP_PORT}/{stream['path']}/whep"}
             for stream in profile["streams"]
         ]
+
+    @staticmethod
+    def stream_options() -> list[list[dict]]:
+        """Selectable streams per camera, in _CAM_LABELS order (for the UI dropdowns)."""
+        return [[dict(option) for option in camera] for camera in _STREAM_OPTIONS]
 
     # --- normalisation ---------------------------------------------------------
 

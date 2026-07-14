@@ -195,8 +195,13 @@ imported once on first boot and renamed to `*.json.migrated` (`app/db.py:import_
 
 **Network settings (⚙ → «Налаштування мережі»):** picks which video gateway the *browser* pulls WHEP from
 — **локальне** (turret LAN, `192.168.88.33`, paths `cam95_h264`/`cam96_h264`) or **віддалено** (WireGuard
-VPN, `10.20.100.1`, paths `cam95_main`/`cam96_main`). Both the host and the MediaMTX stream paths are
-editable per profile (`NetworkStore` in `store.py`, `GET/POST /api/network-settings`); labels and the WHEP
+VPN, `10.20.100.1`, paths `cam95_main`/`cam96_main`). The host is free text per profile; each camera's
+stream is a **dropdown = the video-quality picker**, rendered from the server-side catalogue
+`NetworkStore.stream_options()`: **SD 640 · H264** (`cam*_h264`), **HD 1080 · H264** (`cam*_h264_hd`,
+software x264 transcode on the gateway — if the CPU cannot keep up, latency grows) and **HD 1080 · H265**
+(`cam*_main`, Safari only). The catalogue only *offers* paths — `save()` still accepts any valid path, and a
+stored path outside the catalogue shows up as an extra `… (власний)` option (`NetworkStore` in `store.py`,
+`GET/POST /api/network-settings`); labels and the WHEP
 port are server-side constants, and an invalid host/path is rejected (keeps the previous value) because the
 value is interpolated into a URL the browser then POSTs its SDP to. `routes.index()` builds
 `window.__CAMERAS__` from the DB **per request**; saving reloads the page (the `<video>` elements and their
