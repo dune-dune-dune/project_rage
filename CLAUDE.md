@@ -124,7 +124,8 @@ definitions survive only in `rws_control.py`, which is the wire protocol shared 
 `F` = safety toggle (**gates firing only**),
 `Space` = hold to fire, `Shift` = hold to **range-find** (edge-paced `rangefinder_seq`, spacing
 `[control] rangefinder_measure_interval_ms`; aim-only), `M` = cycle fire mode
-(short/medium/manual), `Q`/`E` = digital zoom in/out, `TAB` = cycle camera, `I` = cycle AI mode
+(short/medium/manual), `Q`/`E` = digital zoom in/out (**on the wide camera the zoom is centred on the
+crosshair, not on the screen centre** — see below), `TAB` = cycle camera, `I` = cycle AI mode
 (**OFF → AI ON (YOLO) → AI CUSTOM → OFF**), `T` = toggle auto-track (any AI mode; aim-only, never fires).
 AI CUSTOM is a model-free pixel **motion** detector (frame differencing): pixels whose colour changes by
 more than the ⚙ threshold are clustered into blobs, and blobs exceeding the min-object-size are flagged as
@@ -223,6 +224,20 @@ minimal PIN page (`app/templates/login.html`; constant-time `hmac.compare_digest
 the session. Sessions are signed with `SECRET_KEY` from `.env` (set a stable value so they survive
 restarts; otherwise an ephemeral key is used and a warning is logged). **Empty `COCKPIT_PIN` disables the
 gate** (open access) — a warning is logged.
+
+**Crosshair-centred zoom (wide camera only):** the crosshair offset is a **boresight calibration** — the
+frame point the jet actually hits. On the **wide camera (CAM 95)** the reticle is pinned to the geometric
+centre of the screen and the *picture is panned* by the offset instead, so `Q`/`E` magnify around the
+crosshair and the aim point no longer depends on the zoom. `cockpit.js:viewParams(i)` is the sole owner of
+the geometry (`applyView()` writes both the `<video>` `transform: translate(t) scale(z)` and the reticle's
+`left`/`top` in **px**, so it must re-run on resize) and publishes it as `window.cockpit.view`
+(`{scale, tx, ty, crossX, crossY}`) — `ai.js` reads that instead of re-deriving the mapping. Because
+`object-fit: cover` clips to the element box, the pan's only headroom is the box's own scale-up, giving a
+**dynamic base overscan** `base = 1/(1 − 2·|offset|/100)` (offset 10 % → показуємо 80 % кадру, 20 % у
+резерві; **offset 0 → base 1, кропу немає взагалі**), capped by `BASE_MAX = 3.0`. **CAM 96 (вузькокутна)
+навмисно не змінена** — без панорамування, приціл малюється зміщеним, і її точка наведення, як і раніше,
+повзе до центру кадру при зумі. Повний вивід формул:
+[docs/architecture.md → Crosshair-centred zoom](docs/architecture.md#crosshair-centred-zoom-wide-camera).
 
 **Camera switching (instant):** the cockpit pre-connects a persistent `RTCPeerConnection` + its own
 `<video>` for **every** camera at load; `TAB` only flips which pre-decoded stream is visible (no

@@ -418,31 +418,28 @@ const AI = (() => {
 
   // ----------------------------------------------- coordinate mapping (F <-> V)
   // Frame-normalised (fx, fy in 0..1 over the intrinsic video frame) <-> viewport
-  // pixels, accounting for object-fit: cover AND the digital zoom (scale about
-  // centre). These must match cockpit.css (#video) exactly.
-  function coverScale(vw, vh) {
-    const W = window.innerWidth, H = window.innerHeight;
-    return Math.max(W / vw, H / vh);
-  }
-
+  // pixels. cockpit.js owns the video transform (object-fit: cover scale, digital
+  // zoom, and — on the wide camera — the pan that pins the crosshair to the screen
+  // centre) and publishes it as window.cockpit.view; read it rather than
+  // re-deriving it, so the overlay can never disagree with the picture.
   function frameToViewport(fx, fy, vw, vh) {
-    const W = window.innerWidth, H = window.innerHeight;
-    const zoom = (window.cockpit && window.cockpit.zoom) || 1;
-    const s = coverScale(vw, vh) * zoom;
-    return { x: W / 2 + (fx - 0.5) * vw * s, y: H / 2 + (fy - 0.5) * vh * s };
+    const v = (window.cockpit && window.cockpit.view) || { scale: 1, tx: 0, ty: 0 };
+    return {
+      x: window.innerWidth / 2 + v.tx + (fx - 0.5) * vw * v.scale,
+      y: window.innerHeight / 2 + v.ty + (fy - 0.5) * vh * v.scale,
+    };
   }
 
-  // The crosshair sits at (50 + cross.x)% / (50 + cross.y)% of the viewport and
-  // is NOT affected by zoom. Invert the mapping to get its position in the same
-  // frame-normalised space as the detections — this is the aim target.
+  // Invert the mapping at the reticle: the frame point the turret must centre on.
+  // This is the aim target — on the wide camera it is the calibrated boresight and
+  // does NOT move with zoom.
   function crosshairFrame(vw, vh) {
-    const W = window.innerWidth, H = window.innerHeight;
-    const zoom = (window.cockpit && window.cockpit.zoom) || 1;
-    const cross = (window.cockpit && window.cockpit.cross) || { x: 0, y: 0 };
-    const Cx = ((50 + cross.x) / 100) * W;
-    const Cy = ((50 + cross.y) / 100) * H;
-    const s = coverScale(vw, vh) * zoom;
-    return { x: 0.5 + (Cx - W / 2) / (vw * s), y: 0.5 + (Cy - H / 2) / (vh * s) };
+    const v = window.cockpit && window.cockpit.view;
+    if (!v || !vw || !vh) return { x: 0.5, y: 0.5 };
+    return {
+      x: 0.5 + (v.crossX - window.innerWidth / 2 - v.tx) / (vw * v.scale),
+      y: 0.5 + (v.crossY - window.innerHeight / 2 - v.ty) / (vh * v.scale),
+    };
   }
 
   // ------------------------------------------------------------------- drawing

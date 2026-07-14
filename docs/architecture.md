@@ -123,6 +123,38 @@ Key properties of the cockpit's `TurretController` ([`services/web/app/turret.py
   **auto-track aims, it never fires.** A separate `aim_timeout_ms` (default 500 ms) zeroes the aim if the
   browser stops sending.
 
+## Crosshair-centred zoom (wide camera)
+
+The crosshair offset (⚙ → «приціл», `/api/crosshair`, ±50 % of the viewport in 0.01 % steps) is a
+**boresight calibration**: the frame point the water jet actually hits. On the **wide camera (CAM 95)** the
+reticle is therefore pinned to the geometric centre of the screen and the *picture* is panned by that offset,
+so the digital zoom (`Q`/`E`) magnifies around the crosshair rather than around the screen centre.
+
+`cockpit.js:viewParams(i)` is the single owner of the geometry (`applyView()` is its only writer — of both
+the `<video>` transform and the reticle's `left`/`top`), and it publishes the result as
+`window.cockpit.view` so `ai.js` never re-derives it. With `W,H` = viewport, `d = (cross.x/100·W,
+cross.y/100·H)`:
+
+- The `<video>` gets `transform: translate(tx,ty) scale(z)` about `center center`. The calibrated point sits
+  at `c + d` in box coords, lands at `c + z·d + t`, so pinning it to the centre needs **`t = −z·d`**.
+- **Pan headroom.** `object-fit: cover` clips the frame to the element box (100vw × 100vh), so the cover
+  overscan is *not* pannable — the only reserve is the box's own scale-up. The painted rect is `W·z × H·z`
+  centred at `c + t`, so no black edge means `|tx| ≤ W(z−1)/2`. Substituting `t = −z·d` at the minimum zoom
+  yields the **dynamic base overscan**
+
+  ```
+  base = max(1, 1/(1 − 2·|cross.x|/100), 1/(1 − 2·|cross.y|/100)),  z = base · zoom
+  ```
+
+  i.e. a 10 % offset shows 80 % of the frame and reserves 20 % for the pan; a **zero offset means base = 1,
+  no crop at all** (pixel-identical to the pre-change behaviour). `BASE_MAX = 3.0` caps it (honours offsets
+  up to ±33.3 % exactly); beyond that `tx`/`ty` are clamped to the headroom and the reticle is drawn at
+  `W/2 + tx + z·dx` — it drifts off-centre *with* the picture rather than lying about the aim point.
+- Consequence: on CAM 95 the aim point is `0.5 + dx/(vw·cover)` in frame coords — **constant across zoom
+  levels**. **CAM 96 is deliberately untouched** (`base = 1`, no pan, reticle drawn at its offset), so it
+  keeps its old zoom-dependent aim drift. Same formula, different parameters — the branch lives only in
+  `viewParams()`.
+
 ## AI detection & auto-track path
 
 Detection and target selection run **entirely in the browser** ([`app/static/ai.js`](../services/web/app/static/ai.js)
@@ -168,10 +200,16 @@ Key T (AI on) → on each result: pick target nearest the crosshair (then neares
   absolute turret angle. Tracking instead drives *velocity proportional to the pixel error* and lets the
   camera feedback null it to zero — robust without calibration; `gain`/`deadzone`/`max_velocity`
   (`settings.toml [track]`) tune the feel.
-- **Crosshair offset is honoured.** The aim point is the crosshair's viewport position
-  `((50+cross.x)%, (50+cross.y)%)`, **not** the screen centre. `ai.js` inverts the `object-fit: cover` +
-  `scale(zoom)` transform to express it in the same frame-normalised space as the detections, so the target
-  is centred on the *offset* crosshair.
+- **Crosshair offset is honoured.** The aim point is the crosshair, **not** the screen centre. `cockpit.js`
+  owns the video transform and publishes it as `window.cockpit.view` (`{scale, tx, ty, crossX, crossY}`);
+  `ai.js` inverts it (`crosshairFrame`) to express the reticle in the same frame-normalised space as the
+  detections, so the overlay can never disagree with the picture.
+  - On the **wide camera (CAM 95)** the reticle is pinned to the screen centre and the picture is *panned*
+    by the calibration offset instead (see «Crosshair-centred zoom» below), so the aim point is the
+    calibrated boresight and is **independent of the digital zoom**.
+  - On the **narrow camera (CAM 96)** the old mapping still applies: the reticle is drawn at
+    `((50+cross.x)%, (50+cross.y)%)` and, because the offset is divided by the zoom, the aim point drifts
+    toward the frame centre as you zoom in. The two cameras therefore track slightly differently.
 - **Camera-agnostic.** Inference reads the same `<video>` element the operator sees, so `TAB` switching
   cameras (95 ↔ 96) needs no server change; a switch just drops the current target lock.
 - **Model conversion (one-off, offline).** `scripts/export_onnx.py` converts `data/model/best.pt` →

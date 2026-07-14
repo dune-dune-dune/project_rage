@@ -18,7 +18,11 @@ html, body {
   height: 100vh;
   object-fit: cover;
   background: #000;
-  transform-origin: center center; /* digital zoom scales from the centre */
+  /* cockpit.js writes `translate(...) scale(...)` here: the digital zoom scales
+     from the box centre, and on the wide camera a pan slides the picture so the
+     calibrated crosshair point sits at that centre. object-fit: cover clips to
+     this box, so the pan's only headroom is the scale-up itself. */
+  transform-origin: center center;
 }
 
 /* One <video> per camera is pre-connected and stacked; only the active one is

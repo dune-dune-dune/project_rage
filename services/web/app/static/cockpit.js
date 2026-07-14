@@ -341,27 +341,90 @@ setInterval(() => {
   pollStatus();
 }, 200);
 
-// ------------------------------------------------------------- digital zoom
+// -------------------------------------------------- digital zoom + video pan
 // Q/E scale the video element (client-side crop). Persisted in localStorage.
+//
+// On the WIDE camera the picture is additionally PANNED so that the calibrated
+// crosshair point sits at the geometric centre of the screen, where the reticle
+// is pinned. Zoom then magnifies around the crosshair instead of the screen
+// centre, and the aim point stops depending on the zoom level.
+//
+// The pan needs headroom: `object-fit: cover` clips the frame to the element box
+// (100vw x 100vh), so the cover overscan is NOT pannable — the only reserve is
+// the box's own scale-up. `translate(t) scale(z)` about `center center` paints a
+// W*z x H*z rect centred at c+t, so no black edge means |tx| <= W(z-1)/2. The
+// calibrated point lands at c + z*d + t, so pinning it to the centre needs
+// tx = -z*dx. Substituting at the minimum zoom gives the base scale below: an
+// 10 % offset shows 80 % of the frame and reserves 20 % for the pan. With a zero
+// offset the base is 1 — no crop at all.
+//
+// The narrow camera is left exactly as it was: no pan, reticle drawn at its
+// offset. Both cases are the same formula with different parameters (viewParams).
 const ZOOM_STEP = 0.2, ZOOM_MIN = 1.0, ZOOM_MAX = 4.0;
+const BASE_MAX = 3.0;   // pan-reserve cap; honours offsets up to |cross| = 33.3 %
+const WIDE_TAG = "95";  // wide-angle camera label marker (cf. cameraKind())
 let zoom = clampZoom(parseFloat(localStorage.getItem("cockpit.zoom")));
 // One <video> per camera (populated by the WHEP block below). Declared here so
-// applyZoom can scale them; empty on the first call, filled once cameras load.
+// applyView can transform them; empty on the first call, filled once cameras load.
 let videoEls = [];
+// Camera list + active index. Declared up here (rather than next to the WHEP
+// block) because applyView() reads them and runs before that block does.
+const cameras = Array.isArray(window.__CAMERAS__) ? window.__CAMERAS__ : [];
+let camIndex = 0;
 
 function clampZoom(z) {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Number.isFinite(z) ? z : 1.0));
 }
-function applyZoom() {
-  const t = "scale(" + zoom + ")";
-  videoEls.forEach((v) => (v.style.transform = t));
+function clampAbs(v, m) {
+  return Math.max(-m, Math.min(m, v));
+}
+function isWideCam(i) {
+  const cam = cameras[i];
+  return !!(cam && typeof cam.label === "string" && cam.label.includes(WIDE_TAG));
+}
+
+// Everything the <video> transform, the reticle and ai.js need, for camera `i`:
+//   z       — CSS scale applied to the <video> (base overscan x digital zoom)
+//   tx, ty  — video pan in viewport px
+//   crossX/crossY — where the reticle (= the aim point) actually lands, in px
+function viewParams(i) {
+  const W = window.innerWidth, H = window.innerHeight;
+  const dx = (cross.x / 100) * W, dy = (cross.y / 100) * H;
+  if (!isWideCam(i)) {
+    return { z: zoom, tx: 0, ty: 0, crossX: W / 2 + dx, crossY: H / 2 + dy };
+  }
+  const base = Math.min(BASE_MAX, Math.max(
+    1,
+    W / Math.max(1, W - 2 * Math.abs(dx)),
+    H / Math.max(1, H - 2 * Math.abs(dy)),
+  ));
+  const z = base * zoom;
+  // Clamp to the available headroom so an extreme offset can never expose a
+  // black edge. When the clamp bites, the reticle drifts off-centre WITH the
+  // picture rather than lying about where the turret is aimed.
+  const tx = clampAbs(-z * dx, (W * (z - 1)) / 2);
+  const ty = clampAbs(-z * dy, (H * (z - 1)) / 2);
+  return { z, tx, ty, crossX: W / 2 + tx + z * dx, crossY: H / 2 + ty + z * dy };
+}
+
+// Single writer of the video transform AND the reticle position (px, not %, so
+// it must be re-run on resize).
+function applyView() {
+  videoEls.forEach((v, i) => {
+    const p = viewParams(i);
+    v.style.transform =
+      "translate(" + p.tx + "px, " + p.ty + "px) scale(" + p.z + ")";
+  });
+  const p = viewParams(camIndex);
+  crosshairEl.style.left = p.crossX + "px";
+  crosshairEl.style.top = p.crossY + "px";
 }
 function zoomBy(delta) {
   zoom = clampZoom(zoom + delta);
   localStorage.setItem("cockpit.zoom", String(zoom));
-  applyZoom();
+  applyView();
 }
-applyZoom();
+window.addEventListener("resize", applyView);
 
 // ---------------------------------------------------------- crosshair + settings
 // Crosshair offset (percent of viewport from centre) is persisted server-side
@@ -392,14 +455,15 @@ function quantizeCross(value) {
 // ``typing`` is the input the operator is editing right now, if any: its value is
 // left alone so re-formatting ("1" -> "1.00") does not fight the keystrokes.
 function applyCrosshair(typing) {
-  crosshairEl.style.left = 50 + cross.x + "%";
-  crosshairEl.style.top = 50 + cross.y + "%";
   if (typing !== xhEl) xhEl.value = cross.x;
   if (typing !== xvEl) xvEl.value = cross.y;
   if (typing !== xhNum) xhNum.value = cross.x.toFixed(2);
   if (typing !== xvNum) xvNum.value = cross.y.toFixed(2);
   xhVal.textContent = cross.x.toFixed(2);
   xvVal.textContent = cross.y.toFixed(2);
+  // The offset moves the reticle (narrow cam) or pans the picture under a centred
+  // reticle (wide cam) — applyView() owns both.
+  applyView();
 }
 let crossSaveTimer = null;
 function saveCrosshair() {
@@ -602,8 +666,8 @@ applyCrosshair();
 // RTCPeerConnection established up front; TAB only flips which pre-decoded
 // stream is visible — no renegotiation, no ffmpeg cold start, no ICE wait.
 const cameraEl = document.getElementById("cp-camtype"); // lens type → crosshair panel
-const cameras = Array.isArray(window.__CAMERAS__) ? window.__CAMERAS__ : [];
-let camIndex = 0;
+// `cameras` / `camIndex` are declared with the view model above (applyView needs
+// them before this block runs).
 // One RTCPeerConnection per camera, so a TAB switch can repaint the video
 // status from the target camera's current connection state.
 const pcs = [];
@@ -632,7 +696,7 @@ function setActiveCamera(index) {
   videoEls.forEach((v, i) => v.classList.toggle("active", i === index));
   const cam = cameras[index];
   cameraEl.textContent = cameraKind(cam && cam.label);
-  applyZoom();
+  applyView(); // wide/narrow cams have different pan + reticle placement
   // Repaint the video status from the newly active camera's connection state.
   paintVideo(cam ? (pcs[index] && pcs[index].connectionState) : "none");
 }
@@ -728,6 +792,19 @@ window.cockpit = {
   get zoom() { return zoom; },       // digital zoom scale applied to the videos
   get camIndex() { return camIndex; },
   get videoEl() { return activeVideo(); },
+  // Active camera's view: everything needed to map frame <-> viewport.
+  //   scale  — viewport px per source pixel (object-fit: cover scale x CSS scale)
+  //   tx, ty — video pan in viewport px
+  //   crossX/crossY — the reticle (= the aim point) in viewport px
+  get view() {
+    const v = activeVideo();
+    const vw = v ? v.videoWidth : 0, vh = v ? v.videoHeight : 0;
+    const p = viewParams(camIndex);
+    const cover = vw && vh
+      ? Math.max(window.innerWidth / vw, window.innerHeight / vh)
+      : 1;
+    return { scale: cover * p.z, tx: p.tx, ty: p.ty, crossX: p.crossX, crossY: p.crossY };
+  },
   get azDeg() { return lastAzDeg; },  // turret azimuth (deg) or null
   get elDeg() { return lastElDeg; },  // turret elevation (deg) or null
 };
