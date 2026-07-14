@@ -129,7 +129,8 @@ definitions survive only in `rws_control.py`, which is the wire protocol shared 
 AI CUSTOM is a model-free pixel **motion** detector (frame differencing): pixels whose colour changes by
 more than the ⚙ threshold are clustered into blobs, and blobs exceeding the min-object-size are flagged as
 a drone. The ⚙ button (top-left) opens a dropdown of settings panels: **мапа** (`/api/map-settings`),
-**приціл** (H/V offset, `/api/crosshair`), **ШІ модель** (confidence threshold default 70 %, min object size
+**приціл** (H/V offset у % від центру, крок **0.01 %** — повзунок + числове поле для точного вводу;
+`/api/crosshair`, значення клампиться до ±50 і округлюється до 2 знаків у `store.py`), **ШІ модель** (confidence threshold default 70 %, min object size
 in px, Custom motion threshold %, `/api/ai-settings`), **мережа** (see below) and **алерти** (placeholder).
 All of them persist to SQLite (`services/web/data/cockpit.db`), not to JSON files.
 A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the

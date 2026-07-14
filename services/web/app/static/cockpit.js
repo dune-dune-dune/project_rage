@@ -367,20 +367,39 @@ applyZoom();
 // Crosshair offset (percent of viewport from centre) is persisted server-side
 // via /api/crosshair so it survives restarts and can be reused by other tooling.
 const crosshairEl = document.getElementById("crosshair");
+// Offset resolution is 0.01 % of the viewport: the range inputs are the coarse
+// aim, the number inputs (same step) are exact entry / arrow-key nudging.
+const CROSS_LIMIT = 50;      // percent from centre, matches the server clamp
+const CROSS_STEP = 0.01;     // percent
 const xhEl = document.getElementById("xh");
 const xvEl = document.getElementById("xv");
+const xhNum = document.getElementById("xh-num");
+const xvNum = document.getElementById("xv-num");
 const xhVal = document.getElementById("xh-val");
 const xvVal = document.getElementById("xv-val");
 const initCross = window.__CROSSHAIR__;
 let cross = initCross && typeof initCross === "object" ? { x: +initCross.x || 0, y: +initCross.y || 0 } : { x: 0, y: 0 };
 
-function applyCrosshair() {
+// Snap to the 0.01 step and clamp, so a hand-typed value cannot drift off-grid
+// or outside the range the server would clamp it to anyway.
+function quantizeCross(value) {
+  const number = parseFloat(value);
+  if (!isFinite(number)) return 0;
+  const snapped = Math.round(number / CROSS_STEP) * CROSS_STEP;
+  return Math.max(-CROSS_LIMIT, Math.min(CROSS_LIMIT, +snapped.toFixed(2)));
+}
+
+// ``typing`` is the input the operator is editing right now, if any: its value is
+// left alone so re-formatting ("1" -> "1.00") does not fight the keystrokes.
+function applyCrosshair(typing) {
   crosshairEl.style.left = 50 + cross.x + "%";
   crosshairEl.style.top = 50 + cross.y + "%";
-  xhEl.value = cross.x;
-  xvEl.value = cross.y;
-  xhVal.textContent = Math.round(cross.x);
-  xvVal.textContent = Math.round(cross.y);
+  if (typing !== xhEl) xhEl.value = cross.x;
+  if (typing !== xvEl) xvEl.value = cross.y;
+  if (typing !== xhNum) xhNum.value = cross.x.toFixed(2);
+  if (typing !== xvNum) xvNum.value = cross.y.toFixed(2);
+  xhVal.textContent = cross.x.toFixed(2);
+  xvVal.textContent = cross.y.toFixed(2);
 }
 let crossSaveTimer = null;
 function saveCrosshair() {
@@ -393,8 +412,20 @@ function saveCrosshair() {
     }).catch(() => {});
   }, 250);
 }
-xhEl.addEventListener("input", () => { cross.x = parseFloat(xhEl.value) || 0; applyCrosshair(); saveCrosshair(); });
-xvEl.addEventListener("input", () => { cross.y = parseFloat(xvEl.value) || 0; applyCrosshair(); saveCrosshair(); });
+function bindCrossInput(el, axis) {
+  el.addEventListener("input", () => {
+    cross[axis] = quantizeCross(el.value);
+    applyCrosshair(el);
+    saveCrosshair();
+  });
+  // Leaving a half-typed number field ("", "-", "1.") reformats it to the value
+  // actually in use.
+  el.addEventListener("change", () => applyCrosshair());
+}
+bindCrossInput(xhEl, "x");
+bindCrossInput(xvEl, "y");
+bindCrossInput(xhNum, "x");
+bindCrossInput(xvNum, "y");
 document.getElementById("xh-reset").addEventListener("click", () => { cross = { x: 0, y: 0 }; applyCrosshair(); saveCrosshair(); });
 applyCrosshair();
 

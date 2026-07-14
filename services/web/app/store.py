@@ -19,8 +19,10 @@ import threading
 
 from .db import KEY_AI, KEY_CROSSHAIR, KEY_MAP, KEY_NETWORK, SettingsDb
 
-# Offset range in percent of the viewport, measured from centre.
+# Offset range in percent of the viewport, measured from centre. The operator
+# aims in 0.01 % steps, so the stored value keeps two decimals.
 _LIMIT = 50.0
+_DECIMALS = 2
 _DEFAULT = {"x": 0.0, "y": 0.0}
 
 
@@ -29,7 +31,7 @@ def _clamp(value: object) -> float:
         number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return 0.0
-    return max(-_LIMIT, min(_LIMIT, number))
+    return round(max(-_LIMIT, min(_LIMIT, number)), _DECIMALS)
 
 
 class CrosshairStore:
