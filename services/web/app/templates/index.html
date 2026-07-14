@@ -128,6 +128,9 @@
         <span class="ai-state-key">Рушій (ONNX)</span>
         <span id="ai-state-engine" class="ai-state-val">не запущено</span>
       </div>
+      <!-- Only shown when inference fell back to the CPU: says why (usually the
+           plain-http origin, which hides navigator.gpu). -->
+      <div id="ai-state-backend" class="sp-note" hidden></div>
       <div class="ai-state-row">
         <span class="ai-state-key">Конвертер</span>
         <span id="ai-state-exporter" class="ai-state-val">—</span>

@@ -13,6 +13,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
+# CPU-only torch, from PyTorch's own index. The default PyPI wheel drags in the
+# whole CUDA stack (nvidia-*, cuda-toolkit, triton — several GB) which this image
+# never uses: the export runs on the CPU. Installing it first also means the
+# requirements step below already finds torch satisfied.
+RUN pip install --no-cache-dir \
+      --index-url https://download.pytorch.org/whl/cpu \
+      torch torchvision
+
 # Its own layer: torch is a slow, ~GB install and must not be re-run on every
 # code change (the Jetson builds this image itself — see .github/workflows/deploy.yml).
 COPY services/exporter/requirements.txt ./requirements.txt

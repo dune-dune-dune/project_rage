@@ -28,6 +28,7 @@
 
   const stateModelEl = document.getElementById("ai-state-model");
   const stateEngineEl = document.getElementById("ai-state-engine");
+  const stateBackendEl = document.getElementById("ai-state-backend");
   const stateExporterEl = document.getElementById("ai-state-exporter");
 
   const POLL_BUSY_MS = 2000;   // while a conversion is running
@@ -149,15 +150,25 @@
   // console (the #ai badge it wrote to no longer exists).
   if (window.AI && window.AI.onEngine && stateEngineEl) {
     window.AI.onEngine((engine) => {
+      const where = engine.backend === "webgpu" ? "WebGPU" : "WASM";
       const text = {
         idle: "не запущено (клавіша I)",
         loading: "завантаження моделі…",
-        running: `працює — ${engine.fps.toFixed(1)} к/с, ${engine.ms} мс`,
+        running: `працює (${where}) — ${engine.fps.toFixed(1)} к/с, ${engine.ms} мс`,
         error: "помилка: " + engine.error,
       }[engine.state];
       stateEngineEl.textContent = text || engine.state;
       stateEngineEl.className =
         "ai-state-val " + (engine.state === "running" ? "ok" : engine.state === "error" ? "bad" : "");
+
+      // Running on the CPU when a GPU path exists is the single biggest reason
+      // detection feels slow — say why it fell back instead of leaving the
+      // operator to guess (usually: the cockpit is served over plain http://).
+      if (stateBackendEl) {
+        const degraded = engine.state === "running" && engine.backend !== "webgpu" && engine.backendNote;
+        stateBackendEl.hidden = !degraded;
+        stateBackendEl.textContent = degraded ? "WebGPU недоступний: " + engine.backendNote : "";
+      }
     });
   }
 

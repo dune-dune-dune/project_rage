@@ -214,6 +214,19 @@ Key T (AI on) → on each result: pick target nearest the crosshair (then neares
   cameras (95 ↔ 96) needs no server change; a switch just drops the current target lock.
 - **ONNX Runtime** is vendored once by `scripts/fetch_ort.sh` into `app/static/vendor/` (served locally,
   no runtime CDN). Detection thresholds (`conf`, `min_size`) persist to SQLite via `/api/ai-settings`.
+- **Execution provider: WebGPU, falling back to WASM.** `ai-worker.js` loads the JSEP bundle
+  (`ort.webgpu.min.js`, which carries both backends) and tries `executionProviders: ["webgpu"]` first —
+  that runs YOLO on the **operator's** GPU (~20–40 ms a frame) instead of one CPU core (~500 ms for a
+  YOLO11s-class model, i.e. ~2 FPS, which visibly lags the tracker). It falls back to single-threaded SIMD
+  WASM whenever WebGPU is unavailable, and the ⚙ panel reports which backend came up and why:
+  - ⚠️ **WebGPU needs a secure context.** `navigator.gpu` does not exist on a plain `http://` LAN origin —
+    which is exactly how the cockpit is normally served — so the default field setup silently runs on WASM.
+    `localhost` counts as secure; otherwise allow the origin in the browser
+    (Chrome: `chrome://flags/#unsafely-treat-insecure-origin-as-secure`) or serve the cockpit over HTTPS.
+    Note that HTTPS then makes the plain-http WHEP requests to MediaMTX mixed content, so that route
+    requires TLS on the video gateway too — the browser flag is the cheap path.
+  - The GPU used is the **client's** (a MacBook's M-series GPU works via Metal in Chrome/Edge, and in
+    Safari 18+). The Jetson's GPU is not involved in detection at all — it only serves the `.onnx` file.
 
 ### AI model library (upload / convert / switch)
 

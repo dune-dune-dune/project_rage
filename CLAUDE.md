@@ -99,7 +99,7 @@ python3 test_rws_control.py --dry-run --verbose --packet-limit 5
 # Web cockpit (Flask + Gunicorn). Copy services/web/.env.example → services/web/.env first.
 # Linux (full stack in Docker):
 cd services/web && docker compose up --build          # cockpit :8000 + exporter :8901 + video_gateway :8889
-#   NOTE: the exporter image installs ultralytics/torch (~2-3 GB) — the first build is SLOW.
+#   NOTE: the exporter image installs ultralytics + CPU-only torch (~1-1.5 GB) — the first build is SLOW.
 #   Skip it with `docker compose up cockpit video_gateway`; only .pt->ONNX conversion is lost
 #   (uploading a ready .onnx still works).
 # Jetson / production (everything in Docker + TF03 rangefinder passthrough):
@@ -155,8 +155,19 @@ is a settings key. `data/model/best.onnx` is imported once as the **builtin** mo
 deleted (nor can the active one) — there is always a fallback. Switching is a **hot swap**
 (`AI.setModel()` re-inits the ONNX worker; **no page reload**, unlike the network panel), and the panel
 shows readiness explicitly: per-model status, the browser ONNX engine (`не запущено` / `завантаження` /
-`працює — N к/с, M мс` / `помилка: …`) and whether the exporter answers. This is all **AI ON (YOLO)** only
-— **AI CUSTOM is model-free and untouched**. `scripts/export_onnx.py` still does the same conversion
+`працює (WebGPU|WASM) — N к/с, M мс` / `помилка: …`) and whether the exporter answers. This is all
+**AI ON (YOLO)** only — **AI CUSTOM is model-free and untouched**.
+
+**Inference backend (WebGPU → WASM).** `ai-worker.js` loads the JSEP bundle (`ort.webgpu.min.js` — both
+backends in one file) and tries **WebGPU** first: YOLO then runs on the **operator's** GPU (~20–40 ms a
+frame) instead of one CPU core (~500 ms ≈ 2 FPS for an `s`-class model, which visibly lags auto-track). It
+falls back to single-threaded SIMD WASM otherwise, and the panel reports which backend came up **and why**
+(`#ai-state-backend`). ⚠️ **WebGPU requires a secure context**: `navigator.gpu` does not exist on a plain
+`http://` LAN origin — the normal way the cockpit is served — so the field default silently ends up on
+WASM. `localhost` counts as secure; otherwise allow the origin in the browser
+(`chrome://flags/#unsafely-treat-insecure-origin-as-secure`) or serve over HTTPS (which then needs TLS on
+MediaMTX too, or the WHEP requests become mixed content). The GPU is the **client's** — the Jetson's GPU is
+never involved in detection. `scripts/export_onnx.py` still does the same conversion
 offline.
 A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
 bottom edge, styled in `cockpit.css`) shows **five** groups, each an SVG icon + label + value:
@@ -366,11 +377,18 @@ Details in [docs/architecture.md#known-gaps](docs/architecture.md#known-gaps).
 6. The rangefinder is bound to the fixed device path `/dev/ttyUSB0` (`docker-compose.jetson.yml`). USB
    enumeration order is not guaranteed across reboots/replugs — if a second USB-serial device appears the
    TF03 may land on `ttyUSB1`. Consider a stable `udev` symlink later; for now confirm the path on the Jetson.
-7. Converting an uploaded `.pt` needs the **`exporter` container built and running** (~2–3 GB image; the
-   Jetson builds it itself, so the first deploy after this feature is slow). Without it the panel shows
+7. Converting an uploaded `.pt` needs the **`exporter` container built and running** (~1–1.5 GB image —
+   CPU-only torch from `download.pytorch.org/whl/cpu`, not the CUDA wheels; the Jetson builds it itself,
+   so the first deploy after this feature is slow — the deploy's SSH step allows 60 min). Without it the panel shows
    «Конвертер: недоступний» and a `.pt` upload ends in `помилка` — a ready-made `.onnx` upload still works.
    A conversion in flight does **not** survive a deploy (`docker compose down` kills it); the row is reset
    to `error` at startup rather than left stuck at `converting`.
+8. **AI inference falls back to WASM over plain HTTP.** WebGPU needs a secure context, and the cockpit is
+   normally served as `http://<lan-ip>:8000`, so `navigator.gpu` is absent and detection runs on one CPU
+   core (~2 FPS for an `s`-class model — auto-track visibly lags). The ⚙ panel states this outright. Fix by
+   opening it via `localhost`, allowing the origin
+   (`chrome://flags/#unsafely-treat-insecure-origin-as-secure`), or serving over HTTPS — note the last one
+   also needs TLS on MediaMTX, or WHEP video becomes blocked mixed content.
 
 This list is a summary — the full, detailed gaps + safety caveats live in
 [docs/architecture.md](docs/architecture.md#known-gaps).

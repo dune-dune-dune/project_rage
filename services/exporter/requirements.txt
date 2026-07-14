@@ -1,5 +1,8 @@
 # The exporter is the ONLY place torch lives. The cockpit runtime stays torch-free
 # (services/web/requirements.txt) — see services/exporter/README.md for why.
+# torch/torchvision are NOT listed here: the Dockerfile installs the CPU-only build
+# from download.pytorch.org first, so ultralytics finds the dependency satisfied
+# instead of pulling the multi-GB CUDA wheels from PyPI.
 ultralytics>=8.1
 onnx>=1.15
 onnxslim>=0.1

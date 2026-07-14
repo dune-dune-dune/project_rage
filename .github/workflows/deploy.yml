@@ -34,6 +34,9 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SERVER_PORT || 22 }}
+          # Default is 10m — not enough: the exporter image installs torch/ultralytics
+          # and the Jetson builds it itself (a cold build is tens of minutes).
+          command_timeout: 60m
           script: |
             # Перехід до директорії проєкту
             cd ${{ secrets.PROJECT_PATH }}

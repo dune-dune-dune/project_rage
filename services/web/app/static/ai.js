@@ -74,7 +74,9 @@ const AI = (() => {
   // model load was invisible outside the console: the #ai badge it used to write
   // to no longer exists in the DOM.
   //   idle | loading | running | error
-  let engine = { state: "idle", error: "", fps: 0, ms: 0 };
+  // backend: which ONNX Runtime EP came up ("webgpu" = the operator's GPU, ~20-40 ms
+  // a frame; "wasm" = one CPU core, ~500 ms), and backendNote = why it is not WebGPU.
+  let engine = { state: "idle", error: "", fps: 0, ms: 0, backend: "", backendNote: "" };
   const engineListeners = [];
   let frameTimes = [];     // inference timestamps, for the FPS readout
 
@@ -111,7 +113,11 @@ const AI = (() => {
     workerLoading = new Promise((resolve, reject) => {
       worker.onmessage = (e) => {
         const m = e.data;
-        if (m.type === "ready") { workerReady = true; setEngine({ state: "running" }); resolve(); }
+        if (m.type === "ready") {
+          workerReady = true;
+          setEngine({ state: "running", backend: m.backend || "wasm", backendNote: m.note || "" });
+          resolve();
+        }
         else if (m.type === "info") { console.log("AI model:", m.outputName, "dims", m.dims, "(YOLOv8 = [1, 4+nc, N])"); }
         else if (m.type === "dets") {
           busy = false;

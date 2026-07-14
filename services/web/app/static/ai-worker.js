@@ -11,30 +11,80 @@
 // quality; only the heavy compute is offloaded.
 // =============================================================================
 
-importScripts("/static/vendor/ort.min.js");
+// Load the JSEP bundle, which carries BOTH the WebGPU and the WASM backend. Fall
+// back to the plain WASM build if it was never vendored (scripts/fetch_ort.sh) —
+// an old checkout must not lose AI mode entirely just because a file is missing.
+let hasWebgpuBuild = true;
+try {
+  importScripts("/static/vendor/ort.webgpu.min.js");
+} catch (_) {
+  hasWebgpuBuild = false;
+  importScripts("/static/vendor/ort.min.js");
+}
 
 let session = null;
 let imgsz = 640;
 let reported = false;
 const IOU_THRESHOLD = 0.45;
 
+// Which backend actually came up, and — when it is the slow one — why. Reported to
+// the ⚙ panel: on WASM a YOLO11s frame costs ~500 ms (≈2 FPS), on WebGPU ~20-40 ms,
+// so the operator must be able to SEE which one they got rather than guess.
+let backend = "wasm";
+let backendNote = "";
+
+// WebGPU is gated on a secure context: navigator.gpu simply does not exist on a
+// plain http:// LAN origin, which is exactly how the cockpit is normally served.
+// Name that case explicitly — it is the difference between "your GPU is unsupported"
+// (nothing to do) and "serve this over HTTPS/localhost" (a fixable config).
+function webgpuBlockedReason() {
+  if (!hasWebgpuBuild) return "ORT без WebGPU (запустіть scripts/fetch_ort.sh)";
+  if (typeof navigator === "undefined" || !navigator.gpu) {
+    return self.isSecureContext
+      ? "браузер не підтримує WebGPU"
+      : "потрібен захищений контекст (HTTPS або localhost)";
+  }
+  return "";
+}
+
 self.onmessage = async (e) => {
   const m = e.data;
 
   if (m.type === "init") {
     imgsz = m.imgsz || 640;
-    // Single-threaded SIMD WASM: no COOP/COEP requirement, fast enough here.
+    // Single-threaded SIMD WASM: no COOP/COEP requirement. This is both the
+    // WebGPU build's own WASM dependency and the fallback backend.
     if (self.ort && ort.env && ort.env.wasm) {
       ort.env.wasm.wasmPaths = "/static/vendor/";
       ort.env.wasm.numThreads = 1;
       ort.env.wasm.simd = true;
     }
-    try {
-      session = await ort.InferenceSession.create(m.modelUrl, { executionProviders: ["wasm"] });
-      self.postMessage({ type: "ready" });
-    } catch (err) {
-      self.postMessage({ type: "error", message: String((err && err.message) || err) });
+
+    backend = "wasm";
+    backendNote = webgpuBlockedReason();
+    session = null;
+
+    if (!backendNote) {
+      try {
+        session = await ort.InferenceSession.create(m.modelUrl, { executionProviders: ["webgpu"] });
+        backend = "webgpu";
+      } catch (err) {
+        // A GPU that reports itself but cannot run the graph (unsupported op,
+        // driver refusal): keep AI alive on WASM rather than failing the mode.
+        backendNote = "WebGPU не піднявся: " + String((err && err.message) || err);
+        session = null;
+      }
     }
+
+    if (!session) {
+      try {
+        session = await ort.InferenceSession.create(m.modelUrl, { executionProviders: ["wasm"] });
+      } catch (err) {
+        self.postMessage({ type: "error", message: String((err && err.message) || err) });
+        return;
+      }
+    }
+    self.postMessage({ type: "ready", backend, note: backendNote });
     return;
   }
 
