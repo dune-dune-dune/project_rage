@@ -349,12 +349,14 @@ async function pollStatus() {
     moCurEl.textContent = pair(s.motor_current, "A", 2);
     moCurEl.classList.toggle("stale", !s.motor_current || (s.motor_current.x === null && s.motor_current.y === null));
 
-    // Rangefinder distance → crosshair panel + its own bottom-bar field.
+    // Rangefinder distance → crosshair panel (distance_m: TF03 on the Jetson).
     distEl.textContent = num(s.distance_m, " м", 1);
     distEl.classList.toggle("stale", s.distance_m === null || s.distance_m === undefined);
+    // Dedicated bottom-bar field: the TURRET-protocol distance, never the TF03.
     if (distBarEl) {
-      distBarEl.textContent = num(s.distance_m, " м", 1);
-      distBarEl.classList.toggle("stale", s.distance_m === null || s.distance_m === undefined);
+      const dt = s.distance_turret_m;
+      distBarEl.textContent = num(dt, " м", 1);
+      distBarEl.classList.toggle("stale", dt === null || dt === undefined);
     }
 
     // --- Extra protocol telemetry in the bottom bar ---

@@ -740,6 +740,9 @@ class TurretController:
             "camera_angle_deg": self._angle_deg(self._cur_cameras_p),
             # Turret health/telemetry (None until the relevant reply arrives).
             "distance_m": distance_m,
+            # Turret protocol rangefinder distance (status-reply distance_mm),
+            # ALWAYS from the turret — never the serial TF03, unlike distance_m.
+            "distance_turret_m": None if self._cur_distance_mm is None else round(self._cur_distance_mm / 1000.0, 2),
             "battery_percent": self._bat_percent,
             "battery_voltage": self._bat_voltage,
             "motor_temp": {"x": self._temp_x, "y": self._temp_y},

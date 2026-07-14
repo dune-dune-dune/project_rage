@@ -158,3 +158,10 @@ def test_status_parse_surfaces_camera_angle(controller):
     controller._update_status_from_reply(_status_bytes(raw))
     snap = controller.snapshot()
     assert snap["camera_angle_deg"] == 20.0
+
+
+def test_turret_distance_field_uses_status_reply(controller):
+    # _status_bytes hard-codes distance_mm=1000 -> 1.0 m from the turret reply.
+    controller._update_status_from_reply(_status_bytes(0))
+    snap = controller.snapshot()
+    assert snap["distance_turret_m"] == 1.0
