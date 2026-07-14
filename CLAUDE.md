@@ -117,8 +117,12 @@ python3 services/rws_bridge/src/main.py                                # bridge,
 `1`/`2`/`3` = rotation-speed level (velocity multiplier from `[control] speed_levels` = `[50, 100, 1]`:
 `1` = 50 %, `2` = 100 %, `3` = **1 % fine aim**; the boot default is the *fastest* level, i.e. the highest
 percent — **not** the last entry, so the fine level can sit at the end of the list and still land on key
-`3`; auto-track is unaffected), `F` = safety toggle (**gates firing only**),
-`Space` = hold to fire, `M` = cycle fire mode
+`3`; auto-track is unaffected), `4` = toggle **SLOW/precise** mode (`FLAGS1_SLOW`; hardware
+slow-motion, gates nothing), `5` = toggle **camera-drive mode** (while on, W/S steer the physical
+camera axis `cameras_p` at `[camera] rate_deg_s`, clamped to `min_deg`..`max_deg`, and the turret
+elevation holds; aim-only), `F` = safety toggle (**gates firing only**),
+`Space` = hold to fire, `Shift` = hold to **range-find** (edge-paced `rangefinder_seq`, spacing
+`[control] rangefinder_measure_interval_ms`; aim-only), `M` = cycle fire mode
 (short/medium/manual), `Q`/`E` = digital zoom in/out, `TAB` = cycle camera, `I` = cycle AI mode
 (**OFF → AI ON (YOLO) → AI CUSTOM → OFF**), `T` = toggle auto-track (any AI mode; aim-only, never fires).
 AI CUSTOM is a model-free pixel **motion** detector (frame differencing): pixels whose colour changes by
@@ -128,9 +132,14 @@ a drone. The ⚙ button (top-left) opens a dropdown of settings panels: **мап
 in px, Custom motion threshold %, `/api/ai-settings`), **мережа** (see below) and **алерти** (placeholder).
 All of them persist to SQLite (`services/web/data/cockpit.db`), not to JSON files.
 A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
-bottom edge, styled in `cockpit.css`) shows four groups, each an SVG icon + label + value:
+bottom edge, styled in `cockpit.css`) shows groups, each an SVG icon + label + value:
 battery (%+V, `#battery`, whole item pulses red under 15%), motor temps (`#motemp` X/Y),
-motor currents (`#mocur` X/Y), and a **«Статус підключення»** group with two coloured dots — turret
+motor currents (`#mocur` X/Y), speed level (`#speed-bar`), **fire-circuit voltage**
+(`#volt-fire`, «U ПОСТРІЛУ», from `voltage_fire`; pulses red under `FIRE_VOLTAGE_MIN`=20 V =
+system not ready to fire), **CPU voltage** (`#volt-cpu`), **per-motor voltage** (`#mo-volt` X/Y,
+from `voltage_x/y`), **motor RPM** (`#mo-rpm` X/Y, from `rpm_x/y`), **camera-axis position**
+(`#cam-pos`, from the status reply `cameras_p` → `camera_angle_deg`), and a
+**«Статус підключення»** group with two coloured dots — turret
 (`#dot-turret`, green/red from `s.link`/`dry_run`/`bind_error`) and video (`#dot-video`, green/red from
 the active camera's `RTCPeerConnection.connectionState`). Each dot's hover tooltip (`title`) shows
 «Статус турелі/відео: онлайн/офлайн» (`setDot`/`paintVideo` in `cockpit.js`, `.ok`/`.bad` classes);
@@ -142,12 +151,13 @@ tracks the reticle offset) sits at the crosshair's lower-right and shows the ran
 (`#cp-dist`, from `/api/status.distance_m`; on the Jetson this is the serial **Benewake TF03-180**
 LiDAR — see below — otherwise the turret's own status-reply distance) plus the camera lens type
 (`#cp-camtype`: CAM 95 → Ширококутна, CAM 96 → Вузькокутна via
-`cameraKind`) and digital zoom (`#cp-zoom`). Below the camera line a `#cp-state` row shows four boxed
-indicators in order **safety · AI · track · fire-mode**: a **safety padlock** (`#cp-safety`: closed+green
+`cameraKind`) and digital zoom (`#cp-zoom`). Below the camera line a `#cp-state` row shows boxed
+indicators in order **safety · AI · track · slow · camera · fire-mode**: a **safety padlock** (`#cp-safety`: closed+green
 outline when safe, open+red outline when armed — synced to `s.safety_off` in `pollStatus`, which also
 recolours the reticle green/red via `crosshairEl.style.color`); an **AI square** (`#cp-ai`: grey box +
 hand icon = manual/OFF, green «AI»/«AI+» = YOLO/custom); a **track square** (`#cp-track`: grey «T» off,
-green on); and a **fire-mode box** (`#cp-fire` wrapping `#cp-firemode`, `data-mode` set in `paintKeys`:
+green on); a **slow square** (`#cp-slow`: «S», green when SLOW mode on, from `s.slow`); a **camera
+square** (`#cp-cammode`: «C», green when camera-drive mode on, from `s.camera_mode`); and a **fire-mode box** (`#cp-fire` wrapping `#cp-firemode`, `data-mode` set in `paintKeys`:
 `•` short / `•••` medium / `▬` manual). AI/track mirror the `#ai`/`#track` badges and are updated by
 `AI.setBadges()` in `ai.js` (`.off` class toggles grey↔green; `#cp-ai`/`#cp-track`/`#cp-fire` are
 `<div>`s, so `classList` works — unlike the `<svg>` `#cp-safety`, whose class must be set via

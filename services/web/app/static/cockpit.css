@@ -186,6 +186,8 @@ html, body {
    grey when inactive (.off, AI/track only). Same framed-box look as the padlock. */
 #cp-ai,
 #cp-track,
+#cp-slow,
+#cp-cammode,
 #cp-fire {
   display: inline-flex;
   align-items: center;
@@ -202,9 +204,11 @@ html, body {
   font-weight: 700;
   line-height: 1;
 }
-/* Inactive (manual / track-off): grey. */
+/* Inactive (manual / track-off / mode-off): grey. */
 #cp-ai.off,
-#cp-track.off {
+#cp-track.off,
+#cp-slow.off,
+#cp-cammode.off {
   color: #9aa4a8;
   border-color: #9aa4a8;
 }

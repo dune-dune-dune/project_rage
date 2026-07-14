@@ -47,8 +47,10 @@ The **web cockpit control path** (`services/web/`, Flask + Gunicorn) drives the 
 reusing `rws_control.py` — it does **not** go through `rws_bridge`:
 
 ```
-Browser (WASD momentary / 1-2 speed level / F=safety toggle / Space=hold-fire)
-  → on change + ~150 ms heartbeat → POST /api/input {up,down,left,right,safety,fire,fire_mode,speed_level}
+Browser (WASD momentary / 1-3 speed level / 4=SLOW toggle / 5=camera-mode toggle /
+         F=safety toggle / Space=hold-fire / Shift=hold-rangefind)
+  → on change + ~150 ms heartbeat → POST /api/input
+        {up,down,left,right,safety,fire,fire_mode,speed_level,slow,camera_mode,rangefinder}
       (a WebSocket /api/ws path exists with the same payload/handler but is OFF by default — USE_WS in cockpit.js)
   → Flask updates lock-guarded intent + deadman timestamp
   → background sender thread @ 20 Hz → build_generated_command_packet()
@@ -345,9 +347,10 @@ pending hardware validation; `POST /api/input` is the active path.
 
 HTTP routes ([`routes.py`](../services/web/app/routes.py)): `GET /` (cockpit page), `GET /healthz`,
 `GET`/`POST /login`, `GET /logout`,
-`POST /api/input` (JSON intent incl. `speed_level` → controller, 204; active control path), `GET /api/status` (HUD snapshot,
-incl. `track_active`, `speed_level`, `speed_levels`, and turret telemetry: `angle_rot_deg`/`angle_ele_deg`,
-`distance_m`, `battery_percent`/`battery_voltage`, `motor_temp`, `motor_current`), `GET`/`POST /api/crosshair`,
+`POST /api/input` (JSON intent incl. `speed_level`, `slow`, `camera_mode`, `rangefinder` → controller, 204; active control path), `GET /api/status` (HUD snapshot,
+incl. `track_active`, `speed_level`, `speed_levels`, `slow`, `camera_mode`, `rangefinder_seq`, and turret telemetry: `angle_rot_deg`/`angle_ele_deg`,
+`camera_angle_deg`, `distance_m`, `battery_percent`/`battery_voltage`, `motor_temp`, `motor_current`,
+`motor_voltage`, `motor_rpm`, `voltage_fire`, `voltage_cpu`), `GET`/`POST /api/crosshair`,
 `GET`/`POST /api/network-settings` (video profiles + active mode),
 `POST /api/track` (auto-aim velocity → controller, 204),
 `GET`/`POST /api/ai-settings` (conf, min size, Custom motion threshold, ego-motion max shift),

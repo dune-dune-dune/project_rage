@@ -12,6 +12,9 @@ const SPEED =
 const intent = {
   up: false, down: false, left: false, right: false,
   safety: false, fire: false,
+  // 4 = hardware slow/precise mode (toggle); 5 = camera-drive mode (toggle, W/S
+  // steer the camera axis); Shift = request rangefinder measurements (held).
+  slow: false, camera_mode: false, rangefinder: false,
   fire_mode: FIRE_MODES.includes(window.__FIRE_MODE__) ? window.__FIRE_MODE__ : "short",
   speed_level: SPEED.current,
 };
@@ -102,6 +105,12 @@ document.addEventListener("keydown", (e) => {
     if (!e.repeat) nextCamera();
     return;
   }
+  // Shift held = ask the turret to range-find; the server paces the requests.
+  if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
+    if (!intent.rangefinder) { intent.rangefinder = true; dirty = true; }
+    e.preventDefault();
+    return;
+  }
   if (e.repeat) return;
   if (e.code === "KeyF") {
     intent.safety = !intent.safety; // toggle (fire arm)
@@ -116,6 +125,14 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.code === "KeyQ") { zoomBy(+ZOOM_STEP); e.preventDefault(); return; }
   if (e.code === "KeyE") { zoomBy(-ZOOM_STEP); e.preventDefault(); return; }
+  // 4 toggles the hardware slow/precise mode; 5 toggles camera-drive mode.
+  // Handled before the speed-level digits below, which return for any Digit1-9.
+  if (e.code === "Digit4" || e.code === "Numpad4") {
+    intent.slow = !intent.slow; dirty = true; e.preventDefault(); return;
+  }
+  if (e.code === "Digit5" || e.code === "Numpad5") {
+    intent.camera_mode = !intent.camera_mode; dirty = true; e.preventDefault(); return;
+  }
   // Number keys 1..N pick the rotation-speed level (top row and numpad).
   const digit = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
   if (digit) {
@@ -139,6 +156,12 @@ document.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("keyup", (e) => {
+  if (e.code === "ShiftLeft" || e.code === "ShiftRight") {
+    intent.rangefinder = false;
+    dirty = true;
+    e.preventDefault();
+    return;
+  }
   const axis = KEY_TO_AXIS[e.code];
   if (axis) {
     intent[axis] = false;
@@ -153,6 +176,7 @@ document.addEventListener("keyup", (e) => {
 // instead of dropping — it only neutralises if the browser is really gone.
 function releaseControls() {
   intent.up = intent.down = intent.left = intent.right = intent.fire = false;
+  intent.rangefinder = false; // stop ranging when focus/visibility is lost
   dirty = true;
 }
 window.addEventListener("blur", releaseControls);
@@ -209,6 +233,17 @@ const speedBarEl = document.getElementById("speed-bar"); // speed level → bott
 const zoomEl = document.getElementById("cp-zoom"); // digital zoom → crosshair panel
 const safetyIconEl = document.getElementById("cp-safety"); // safety padlock → crosshair panel
 const fireModeIconEl = document.getElementById("cp-firemode"); // fire-mode marks → crosshair panel
+// Extra telemetry-bar readouts (protocol fields surfaced in the bottom bar).
+const camPosEl = document.getElementById("cam-pos");     // camera-axis feedback angle
+const voltFireEl = document.getElementById("volt-fire"); // fire-circuit voltage (readiness)
+const voltCpuEl = document.getElementById("volt-cpu");   // compute-board voltage
+const moVoltEl = document.getElementById("mo-volt");     // per-motor voltage x/y
+const moRpmEl = document.getElementById("mo-rpm");       // per-motor rpm x/y
+// Crosshair-panel mode indicators for the new command toggles.
+const slowIconEl = document.getElementById("cp-slow");   // slow/precise mode badge
+const camIconEl = document.getElementById("cp-cammode"); // camera-drive mode badge
+// Below this fire-circuit voltage the readout pulses red (system not ready to fire).
+const FIRE_VOLTAGE_MIN = 20;
 const keyEls = {};
 document.querySelectorAll(".key").forEach((el) => (keyEls[el.dataset.k] = el));
 
@@ -316,6 +351,36 @@ async function pollStatus() {
     // Rangefinder distance → crosshair panel.
     distEl.textContent = num(s.distance_m, " м", 1);
     distEl.classList.toggle("stale", s.distance_m === null || s.distance_m === undefined);
+
+    // --- Extra protocol telemetry in the bottom bar ---
+    if (camPosEl) {
+      const camAng = s.camera_angle_deg;
+      camPosEl.textContent = num(camAng, "°", 0);
+      camPosEl.classList.toggle("stale", typeof camAng !== "number");
+    }
+    if (voltFireEl) {
+      const vf = s.voltage_fire;
+      voltFireEl.textContent = num(vf, "V", 1);
+      voltFireEl.classList.toggle("stale", typeof vf !== "number");
+      // Pulse red when the fire circuit is below the ready threshold.
+      voltFireEl.classList.toggle("armed", typeof vf === "number" && vf < FIRE_VOLTAGE_MIN);
+    }
+    if (voltCpuEl) {
+      const vc = s.voltage_cpu;
+      voltCpuEl.textContent = num(vc, "V", 1);
+      voltCpuEl.classList.toggle("stale", typeof vc !== "number");
+    }
+    if (moVoltEl) {
+      moVoltEl.textContent = pair(s.motor_voltage, "V", 1);
+      moVoltEl.classList.toggle("stale", !s.motor_voltage || (s.motor_voltage.x === null && s.motor_voltage.y === null));
+    }
+    if (moRpmEl) {
+      moRpmEl.textContent = pair(s.motor_rpm, "", 0);
+      moRpmEl.classList.toggle("stale", !s.motor_rpm || (s.motor_rpm.x === null && s.motor_rpm.y === null));
+    }
+    // Crosshair-panel mode badges for the slow / camera toggles.
+    if (slowIconEl) slowIconEl.classList.toggle("off", !s.slow);
+    if (camIconEl) camIconEl.classList.toggle("off", !s.camera_mode);
   } catch (_) {}
 }
 setInterval(() => {

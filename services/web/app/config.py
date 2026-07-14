@@ -16,6 +16,7 @@ startup; the third is read per request from the database.
 
 from __future__ import annotations
 
+import math
 import os
 import tomllib
 from dataclasses import dataclass
@@ -67,6 +68,10 @@ class Settings:
     rangefinder_enabled: bool
     rangefinder_port: str
     rangefinder_baud: int
+    # Minimum spacing (ms) between turret rangefinder requests while the operator
+    # holds the measure key (Shift). Independent of the serial TF03 above: this
+    # paces the edge-triggered `rangefinder_seq` sent over the RWS command stream.
+    rangefinder_measure_interval_ms: int
 
     # --- Control tuning (settings.toml) ---
     send_rate_hz: int
@@ -87,6 +92,14 @@ class Settings:
     fire_mode: str
     fire_duration_short: int
     fire_duration_medium: int
+
+    # --- Camera drive (settings.toml [camera]) ---
+    # Physical camera-pointing axis (cameras_p), driven with W/S while camera mode
+    # (key 5) is active. Target angle is integrated server-side at this rate and
+    # clamped to [min, max]. Degrees; converted to radians in the controller.
+    camera_rate_deg_s: float
+    camera_min_deg: float
+    camera_max_deg: float
 
     # --- AI auto-track tuning (settings.toml [track]) ---
     # Proportional visual-servo gain, normalised deadzone and velocity cap, plus
@@ -141,6 +154,22 @@ class Settings:
     @property
     def aim_timeout_seconds(self) -> float:
         return self.aim_timeout_ms / 1000.0
+
+    @property
+    def rangefinder_measure_interval_seconds(self) -> float:
+        return self.rangefinder_measure_interval_ms / 1000.0
+
+    @property
+    def camera_rate_rad_s(self) -> float:
+        return math.radians(self.camera_rate_deg_s)
+
+    @property
+    def camera_min_rad(self) -> float:
+        return math.radians(self.camera_min_deg)
+
+    @property
+    def camera_max_rad(self) -> float:
+        return math.radians(self.camera_max_deg)
 
     @property
     def default_speed_index(self) -> int:
@@ -216,6 +245,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
     axes = toml.get("axes", {})
     fire = toml.get("fire", {})
     track = toml.get("track", {})
+    camera = toml.get("camera", {})
 
     return Settings(
         src_ip=os.environ.get("RWS_SRC_IP", "192.168.88.33"),
@@ -227,6 +257,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         rangefinder_enabled=_env_bool("RANGEFINDER_ENABLED", False),
         rangefinder_port=os.environ.get("RANGEFINDER_PORT", "/dev/ttyUSB0"),
         rangefinder_baud=_env_int("RANGEFINDER_BAUD", 115200),
+        rangefinder_measure_interval_ms=int(control.get("rangefinder_measure_interval_ms", 250)),
         send_rate_hz=int(control.get("send_rate_hz", 20)),
         deadman_ms=int(control.get("deadman_ms", 400)),
         ramp_ms=int(control.get("ramp_ms", 250)),
@@ -238,6 +269,9 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         fire_mode=str(fire.get("mode", "short")),
         fire_duration_short=int(fire.get("duration_short", 161)),
         fire_duration_medium=int(fire.get("duration_medium", 605)),
+        camera_rate_deg_s=float(camera.get("rate_deg_s", 15.0)),
+        camera_min_deg=float(camera.get("min_deg", -30.0)),
+        camera_max_deg=float(camera.get("max_deg", 30.0)),
         track_gain=float(track.get("gain", 2.5)),
         track_deadzone=float(track.get("deadzone", 0.02)),
         track_max_velocity=float(track.get("max_velocity", 0.5)),

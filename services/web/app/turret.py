@@ -92,6 +92,13 @@ class _Intent:
     # safety — the turret can always be rotated; safety only affects firing.
     safety_off: bool = False
     fire_held: bool = False   # Space held
+    # 4 toggle: FLAGS1_SLOW hardware slow/precise mode (gates nothing, just slows).
+    slow: bool = False
+    # 5 toggle: camera-drive mode. While on, up/down drive the camera axis
+    # (cameras_p) instead of the turret elevation. Aim-only.
+    camera_mode: bool = False
+    # Shift held: request a turret rangefinder measurement (edge-paced server-side).
+    rangefinder: bool = False
 
 
 _FIRE_MODES = ("short", "medium", "manual")
@@ -154,12 +161,20 @@ class TurretController:
         # currents). None until the corresponding reply arrives. Scales per
         # docs/protocol.md: voltage/current x0.01, battery raw/0xFFFF.
         self._cur_distance_mm: int | None = None
+        self._cur_cameras_p: int | None = None  # raw int32 camera-axis angle (status reply)
         self._bat_percent: int | None = None
         self._bat_voltage: float | None = None
         self._temp_x: int | None = None
         self._temp_y: int | None = None
         self._amp_x: float | None = None
         self._amp_y: float | None = None
+        # Extra telemetry: fire-circuit / CPU voltage, per-motor voltage, motor RPM.
+        self._volt_fire: float | None = None
+        self._volt_cpu: float | None = None
+        self._volt_x: float | None = None
+        self._volt_y: float | None = None
+        self._rpm_x: int | None = None
+        self._rpm_y: int | None = None
 
         # Serial rangefinder (Benewake TF03-180) distance in mm, populated by a
         # dedicated reader thread when settings.rangefinder_enabled. Guarded by
@@ -174,6 +189,12 @@ class TurretController:
         self._next_sequence = 0
         self._fire_seq = 0
         self._fire_was_active = False
+        # Camera-drive target angle (rad), integrated from up/down while camera mode
+        # is on. Held (not reset to 0) between commands so the camera keeps its aim.
+        self._camera_p = 0.0
+        # Edge-paced rangefinder request counter and the last-issue timestamp.
+        self._rangefinder_seq = 0
+        self._last_range_measure = 0.0
         self._packets_sent = 0
         self._replies_received = 0
         self._last_reply_monotonic = 0.0
@@ -323,6 +344,9 @@ class TurretController:
                 right=bool(payload.get("right", False)),
                 safety_off=bool(payload.get("safety", False)),
                 fire_held=bool(payload.get("fire", False)),
+                slow=bool(payload.get("slow", False)),
+                camera_mode=bool(payload.get("camera_mode", False)),
+                rangefinder=bool(payload.get("rangefinder", False)),
             )
             mode = payload.get("fire_mode")
             if mode in _FIRE_MODES:
@@ -444,6 +468,8 @@ class TurretController:
         # (a released axis must not sag/spring back). It drops only on the deadman
         # neutral packet. Fire, not motion, is what the safety gates.
         flags1 = rws_control.FLAGS1_ENABLE
+        if intent.slow:
+            flags1 |= rws_control.FLAGS1_SLOW  # hardware slow/precise mode (key 4)
         flags2 = rws_control.FLAGS2_ROTATION_V | rws_control.FLAGS2_ELEVATION_V | rws_control.FLAGS2_VEL_PRIO
 
         if aim_active:
@@ -474,6 +500,19 @@ class TurretController:
             rotation_direction = int(intent.right) - int(intent.left)
             elevation_direction = int(intent.up) - int(intent.down)
 
+            # Camera-drive mode (key 5): up/down steer the physical camera axis
+            # (cameras_p) instead of the turret elevation. Integrate the target at
+            # camera_rate_rad_s and clamp it; hold the turret elevation still.
+            if intent.camera_mode:
+                self._camera_p = min(
+                    s.camera_max_rad,
+                    max(
+                        s.camera_min_rad,
+                        self._camera_p + elevation_direction * s.camera_rate_rad_s * s.period_seconds,
+                    ),
+                )
+                elevation_direction = 0  # turret elevation holds while driving the camera
+
             # Target normalised velocities (pre-encode). The ramp slews the actual
             # commanded velocity toward these each tick so movement starts smoothly
             # instead of stepping 0->full (the cause of the one-time start jerk).
@@ -498,6 +537,12 @@ class TurretController:
             if ele_p_valid:
                 flags2 |= rws_control.FLAGS2_ELEVATION_P
 
+        # --- Rangefinder: bump the request counter while Shift is held, paced so
+        # the turret gets discrete measurement requests, not one per 20 Hz tick. ---
+        if intent.rangefinder and (now - self._last_range_measure) >= s.rangefinder_measure_interval_seconds:
+            self._rangefinder_seq = (self._rangefinder_seq + 1) & 0xFF
+            self._last_range_measure = now
+
         # --- Firing: gated by the safety toggle only. ---
         fire_active = intent.safety_off and intent.fire_held
         if fire_active and not self._fire_was_active:
@@ -516,6 +561,8 @@ class TurretController:
             flags1=flags1, flags2=flags2, rotation_v=rotation_v, elevation_v=elevation_v,
             rotation_p=rotation_p, elevation_p=elevation_p, arm=arm, fire=fire,
             fire_duration=fire_duration,
+            cameras_p=rws_control.encode_angle_rad_to_packet_s32(self._camera_p),
+            rangefinder_seq=self._rangefinder_seq,
         )
 
     @staticmethod
@@ -569,14 +616,15 @@ class TurretController:
         if reply.flags1 & rws_control.RWS_STATUS_FLAGS1_ELEVATION_P_VALID:
             self._cur_elevation_p = int(reply.elevation_p)
         self._cur_distance_mm = int(reply.distance_mm)
+        self._cur_cameras_p = int(reply.cameras_p)  # camera-axis feedback (raw int32)
 
     def _update_telemetry_from_reply(self, data: bytes) -> None:
-        """Cache battery, motor temperatures and currents from the telemetry reply.
+        """Cache battery, motor and rail telemetry from the 36-byte telemetry reply.
 
-        Scales per docs/protocol.md: voltage x0.01 V, battery raw/0xFFFF. The
-        temperature (deg C) and current scales are not documented; temperature is
-        taken as a raw int16 and current is assumed x0.01 A — adjust here if real
-        readings look off."""
+        Scales per docs/protocol.md: all voltages (battery/fire/cpu/per-motor) x0.01 V,
+        battery percent raw/0xFFFF. The temperature (deg C) and current scales are not
+        confirmed on hardware; temperature is taken as a raw int16 and current is
+        assumed x0.01 A — adjust here if real readings look off. RPM is raw int16."""
         try:
             tele = rws_control.RwsTelemetryWire.from_bytes(data)
         except ValueError:
@@ -587,6 +635,12 @@ class TurretController:
         self._temp_y = int(tele.temperature_y)
         self._amp_x = round(tele.amperage_x * 0.01, 2)
         self._amp_y = round(tele.amperage_y * 0.01, 2)
+        self._volt_fire = round(tele.voltage_fire * 0.01, 2)
+        self._volt_cpu = round(tele.voltage_cpu * 0.01, 2)
+        self._volt_x = round(tele.voltage_x * 0.01, 2)
+        self._volt_y = round(tele.voltage_y * 0.01, 2)
+        self._rpm_x = int(tele.rpm_x)
+        self._rpm_y = int(tele.rpm_y)
 
     def _fire_duration(self) -> int:
         mode = self._fire_mode
@@ -608,6 +662,8 @@ class TurretController:
         arm: bytes,
         fire: bytes,
         fire_duration: int,
+        cameras_p: int = 0,
+        rangefinder_seq: int = 0,
     ) -> rws_control.CommandPacket:
         packet = rws_control.build_generated_command_packet(
             name="cockpit",
@@ -623,8 +679,8 @@ class TurretController:
             arm=arm,
             fire=fire,
             fire_duration=fire_duration,
-            cameras_p=0,
-            rangefinder_seq=0,
+            cameras_p=cameras_p,
+            rangefinder_seq=rangefinder_seq,
             fire_seq=self._fire_seq,
             salt=self._s.salt,
         )
@@ -662,12 +718,15 @@ class TurretController:
             "fire_mode": fire_mode,
             "speed_level": speed_index + 1,
             "speed_levels": len(self._s.speed_levels),
+            "slow": intent.slow,
+            "camera_mode": intent.camera_mode,
             "track_active": track_active,
             "axes": {"up": intent.up, "down": intent.down, "left": intent.left, "right": intent.right},
             "packets_sent": self._packets_sent,
             "replies_received": self._replies_received,
             "sequence": self._next_sequence,
             "fire_seq": self._fire_seq,
+            "rangefinder_seq": self._rangefinder_seq,
             "input_age_ms": input_age_ms,
             "deadman_active": deadman_active,
             "send_rate_hz": self._s.send_rate_hz,
@@ -677,12 +736,18 @@ class TurretController:
             # arrives. Also signals whether the position-hold telemetry is live.
             "angle_rot_deg": self._angle_deg(self._cur_rotation_p),
             "angle_ele_deg": self._angle_deg(self._cur_elevation_p),
+            # Camera-axis feedback angle (deg), from the status reply cameras_p.
+            "camera_angle_deg": self._angle_deg(self._cur_cameras_p),
             # Turret health/telemetry (None until the relevant reply arrives).
             "distance_m": distance_m,
             "battery_percent": self._bat_percent,
             "battery_voltage": self._bat_voltage,
             "motor_temp": {"x": self._temp_x, "y": self._temp_y},
             "motor_current": {"x": self._amp_x, "y": self._amp_y},
+            "motor_voltage": {"x": self._volt_x, "y": self._volt_y},
+            "motor_rpm": {"x": self._rpm_x, "y": self._rpm_y},
+            "voltage_fire": self._volt_fire,
+            "voltage_cpu": self._volt_cpu,
         }
 
     @staticmethod

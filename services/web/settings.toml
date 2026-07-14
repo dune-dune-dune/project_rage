@@ -6,6 +6,9 @@ send_rate_hz = 20        # command stream cadence (20 Hz = 50 ms period)
 deadman_ms = 400         # no fresh browser input for longer than this -> neutral
 ramp_ms = 250            # soft-start: ms to ramp a manual axis 0 -> full; 0 disables
 speed_percent = 100      # global speed scale, 10..100
+# Min spacing (ms) between turret rangefinder requests while Shift is held. Paces
+# the edge-triggered rangefinder_seq on the command stream (NOT the serial TF03).
+rangefinder_measure_interval_ms = 250
 # Rotation-speed levels (percent) selectable with keys 1..N. Multiplies manual
 # motion velocity. Auto-track ignores it. The list need NOT be sorted: the boot
 # default is the *highest* percent, so level 3 (1 %, fine aim) can live at the
@@ -23,6 +26,14 @@ elevation_v_down_unit = 0.8
 mode = "short"        # short | medium | manual
 duration_short = 161
 duration_medium = 605
+
+# Camera-pointing drive (cameras_p). In camera mode (key 5) W/S move the physical
+# camera axis; the target angle is integrated server-side at rate_deg_s and clamped
+# to [min_deg, max_deg]. Aim-only — never touches arm/fire.
+[camera]
+rate_deg_s = 15
+min_deg = -30
+max_deg = 30
 
 # AI auto-track (key T) — closed-loop visual servo tuning. There is no camera
 # FOV calibration, so tracking drives velocity to null the target's pixel error
