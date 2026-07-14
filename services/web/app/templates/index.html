@@ -308,6 +308,18 @@
       </div>
     </div>
 
+    <!-- Rangefinder distance (serial TF03 on the Jetson, else turret status reply). -->
+    <div class="tele">
+      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 8 v8 M20 8 v8 M4 12 h16" />
+        <path d="M7 10 v4 M11 10 v4 M15 10 v4" />
+      </svg>
+      <div class="tele-txt">
+        <span class="tele-label">ДАЛЕКОМІР</span>
+        <span id="dist-bar" class="tele-val" title="Дистанція далекоміра">—</span>
+      </div>
+    </div>
+
     <!-- Camera-axis position feedback (from the status reply cameras_p). -->
     <div class="tele">
       <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">

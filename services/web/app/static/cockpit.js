@@ -227,6 +227,7 @@ const batteryEl = document.getElementById("battery");
 const moTempEl = document.getElementById("motemp");
 const moCurEl = document.getElementById("mocur");
 const distEl = document.getElementById("cp-dist"); // rangefinder → crosshair panel
+const distBarEl = document.getElementById("dist-bar"); // rangefinder → bottom bar (dedicated field)
 const fireModeEl = document.getElementById("firemode") || noopBadge();
 const speedEl = document.getElementById("speed") || noopBadge();
 const speedBarEl = document.getElementById("speed-bar"); // speed level → bottom telemetry bar
@@ -348,9 +349,13 @@ async function pollStatus() {
     moCurEl.textContent = pair(s.motor_current, "A", 2);
     moCurEl.classList.toggle("stale", !s.motor_current || (s.motor_current.x === null && s.motor_current.y === null));
 
-    // Rangefinder distance → crosshair panel.
+    // Rangefinder distance → crosshair panel + its own bottom-bar field.
     distEl.textContent = num(s.distance_m, " м", 1);
     distEl.classList.toggle("stale", s.distance_m === null || s.distance_m === undefined);
+    if (distBarEl) {
+      distBarEl.textContent = num(s.distance_m, " м", 1);
+      distBarEl.classList.toggle("stale", s.distance_m === null || s.distance_m === undefined);
+    }
 
     // --- Extra protocol telemetry in the bottom bar ---
     if (camPosEl) {

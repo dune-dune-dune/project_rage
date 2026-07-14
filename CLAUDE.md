@@ -137,8 +137,9 @@ battery (%+V, `#battery`, whole item pulses red under 15%), motor temps (`#motem
 motor currents (`#mocur` X/Y), speed level (`#speed-bar`), **fire-circuit voltage**
 (`#volt-fire`, «U ПОСТРІЛУ», from `voltage_fire`; pulses red under `FIRE_VOLTAGE_MIN`=20 V =
 system not ready to fire), **CPU voltage** (`#volt-cpu`), **per-motor voltage** (`#mo-volt` X/Y,
-from `voltage_x/y`), **motor RPM** (`#mo-rpm` X/Y, from `rpm_x/y`), **camera-axis position**
-(`#cam-pos`, from the status reply `cameras_p` → `camera_angle_deg`), and a
+from `voltage_x/y`), **motor RPM** (`#mo-rpm` X/Y, from `rpm_x/y`), **rangefinder distance**
+(`#dist-bar`, «ДАЛЕКОМІР», from `distance_m` — the same source as the crosshair `#cp-dist`),
+**camera-axis position** (`#cam-pos`, from the status reply `cameras_p` → `camera_angle_deg`), and a
 **«Статус підключення»** group with two coloured dots — turret
 (`#dot-turret`, green/red from `s.link`/`dry_run`/`bind_error`) and video (`#dot-video`, green/red from
 the active camera's `RTCPeerConnection.connectionState`). Each dot's hover tooltip (`title`) shows
