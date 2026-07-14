@@ -92,11 +92,6 @@ class _Intent:
     # safety — the turret can always be rotated; safety only affects firing.
     safety_off: bool = False
     fire_held: bool = False   # Space held
-    # 4 toggle: FLAGS1_SLOW hardware slow/precise mode (gates nothing, just slows).
-    slow: bool = False
-    # 5 toggle: camera-drive mode. While on, up/down drive the camera axis
-    # (cameras_p) instead of the turret elevation. Aim-only.
-    camera_mode: bool = False
     # Shift held: request a turret rangefinder measurement (edge-paced server-side).
     rangefinder: bool = False
 
@@ -189,9 +184,6 @@ class TurretController:
         self._next_sequence = 0
         self._fire_seq = 0
         self._fire_was_active = False
-        # Camera-drive target angle (rad), integrated from up/down while camera mode
-        # is on. Held (not reset to 0) between commands so the camera keeps its aim.
-        self._camera_p = 0.0
         # Edge-paced rangefinder request counter and the last-issue timestamp.
         self._rangefinder_seq = 0
         self._last_range_measure = 0.0
@@ -344,8 +336,6 @@ class TurretController:
                 right=bool(payload.get("right", False)),
                 safety_off=bool(payload.get("safety", False)),
                 fire_held=bool(payload.get("fire", False)),
-                slow=bool(payload.get("slow", False)),
-                camera_mode=bool(payload.get("camera_mode", False)),
                 rangefinder=bool(payload.get("rangefinder", False)),
             )
             mode = payload.get("fire_mode")
@@ -468,8 +458,6 @@ class TurretController:
         # (a released axis must not sag/spring back). It drops only on the deadman
         # neutral packet. Fire, not motion, is what the safety gates.
         flags1 = rws_control.FLAGS1_ENABLE
-        if intent.slow:
-            flags1 |= rws_control.FLAGS1_SLOW  # hardware slow/precise mode (key 4)
         flags2 = rws_control.FLAGS2_ROTATION_V | rws_control.FLAGS2_ELEVATION_V | rws_control.FLAGS2_VEL_PRIO
 
         if aim_active:
@@ -499,19 +487,6 @@ class TurretController:
             # --- Manual motion: always available, independent of the safety toggle.
             rotation_direction = int(intent.right) - int(intent.left)
             elevation_direction = int(intent.up) - int(intent.down)
-
-            # Camera-drive mode (key 5): up/down steer the physical camera axis
-            # (cameras_p) instead of the turret elevation. Integrate the target at
-            # camera_rate_rad_s and clamp it; hold the turret elevation still.
-            if intent.camera_mode:
-                self._camera_p = min(
-                    s.camera_max_rad,
-                    max(
-                        s.camera_min_rad,
-                        self._camera_p + elevation_direction * s.camera_rate_rad_s * s.period_seconds,
-                    ),
-                )
-                elevation_direction = 0  # turret elevation holds while driving the camera
 
             # Target normalised velocities (pre-encode). The ramp slews the actual
             # commanded velocity toward these each tick so movement starts smoothly
@@ -561,7 +536,6 @@ class TurretController:
             flags1=flags1, flags2=flags2, rotation_v=rotation_v, elevation_v=elevation_v,
             rotation_p=rotation_p, elevation_p=elevation_p, arm=arm, fire=fire,
             fire_duration=fire_duration,
-            cameras_p=rws_control.encode_angle_rad_to_packet_s32(self._camera_p),
             rangefinder_seq=self._rangefinder_seq,
         )
 
@@ -718,8 +692,6 @@ class TurretController:
             "fire_mode": fire_mode,
             "speed_level": speed_index + 1,
             "speed_levels": len(self._s.speed_levels),
-            "slow": intent.slow,
-            "camera_mode": intent.camera_mode,
             "track_active": track_active,
             "axes": {"up": intent.up, "down": intent.down, "left": intent.left, "right": intent.right},
             "packets_sent": self._packets_sent,

@@ -52,10 +52,6 @@
         </div>
         <!-- Auto-track: grey "T" when off, green when on (AI.setBadges() toggles .off). -->
         <div id="cp-track" class="off">T</div>
-        <!-- Slow/precise mode (key 4): grey when off, green when on (pollStatus toggles .off). -->
-        <div id="cp-slow" class="off" title="Повільний / точний режим">S</div>
-        <!-- Camera-drive mode (key 5): grey when off, green when on. -->
-        <div id="cp-cammode" class="off" title="Режим керування камерою">C</div>
         <!-- Fire-mode marks (boxed): 3 dots + 1 line; CSS shows the set for data-mode. -->
         <div id="cp-fire">
           <svg id="cp-firemode" data-mode="short" viewBox="0 0 30 12" width="30" height="12">
@@ -259,76 +255,6 @@
       <div class="tele-txt">
         <span class="tele-label">ШВИДКІСТЬ</span>
         <span id="speed-bar" class="tele-val" title="Рівень швидкості обертання">—</span>
-      </div>
-    </div>
-
-    <!-- Fire-circuit voltage: readiness of the firing rail (pulses red when low). -->
-    <div class="tele">
-      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 2 L4 14 h6 l-1 8 9-12 h-6 z" />
-      </svg>
-      <div class="tele-txt">
-        <span class="tele-label">U ПОСТРІЛУ</span>
-        <span id="volt-fire" class="tele-val" title="Напруга ланцюга пострілу">—</span>
-      </div>
-    </div>
-
-    <!-- Compute-board voltage. -->
-    <div class="tele">
-      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="7" y="7" width="10" height="10" rx="1.5" />
-        <path d="M10 4 v3 M14 4 v3 M10 17 v3 M14 17 v3 M4 10 h3 M4 14 h3 M17 10 h3 M17 14 h3" />
-      </svg>
-      <div class="tele-txt">
-        <span class="tele-label">U CPU</span>
-        <span id="volt-cpu" class="tele-val" title="Напруга плати керування">—</span>
-      </div>
-    </div>
-
-    <!-- Per-motor voltage (X / Y). -->
-    <div class="tele">
-      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 4 v16 M4 12 h5 M9 6 v12 M20 4 v16 M20 12 h-5 M15 6 v12" />
-      </svg>
-      <div class="tele-txt">
-        <span class="tele-label">U МОТОРІВ</span>
-        <span id="mo-volt" class="tele-val" title="Напруга моторів X / Y">—</span>
-      </div>
-    </div>
-
-    <!-- Per-motor RPM (X / Y). -->
-    <div class="tele">
-      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="8" />
-        <path d="M12 12 L12 6 M12 12 L16 15" />
-      </svg>
-      <div class="tele-txt">
-        <span class="tele-label">ОБЕРТИ</span>
-        <span id="mo-rpm" class="tele-val" title="Оберти моторів X / Y">—</span>
-      </div>
-    </div>
-
-    <!-- Rangefinder distance (serial TF03 on the Jetson, else turret status reply). -->
-    <div class="tele">
-      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 8 v8 M20 8 v8 M4 12 h16" />
-        <path d="M7 10 v4 M11 10 v4 M15 10 v4" />
-      </svg>
-      <div class="tele-txt">
-        <span class="tele-label">ДАЛЕКОМІР</span>
-        <span id="dist-bar" class="tele-val" title="Дистанція далекоміра">—</span>
-      </div>
-    </div>
-
-    <!-- Camera-axis position feedback (from the status reply cameras_p). -->
-    <div class="tele">
-      <svg class="tele-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="7" width="14" height="10" rx="2" />
-        <path d="M17 11 L21 8 v8 l-4 -3 z" />
-      </svg>
-      <div class="tele-txt">
-        <span class="tele-label">КАМЕРА</span>
-        <span id="cam-pos" class="tele-val" title="Позиція приводу камери">—</span>
       </div>
     </div>
 

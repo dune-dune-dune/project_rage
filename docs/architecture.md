@@ -47,10 +47,10 @@ The **web cockpit control path** (`services/web/`, Flask + Gunicorn) drives the 
 reusing `rws_control.py` — it does **not** go through `rws_bridge`:
 
 ```
-Browser (WASD momentary / 1-3 speed level / 4=SLOW toggle / 5=camera-mode toggle /
+Browser (WASD momentary / 1-3 speed level /
          F=safety toggle / Space=hold-fire / Shift=hold-rangefind)
   → on change + ~150 ms heartbeat → POST /api/input
-        {up,down,left,right,safety,fire,fire_mode,speed_level,slow,camera_mode,rangefinder}
+        {up,down,left,right,safety,fire,fire_mode,speed_level,rangefinder}
       (a WebSocket /api/ws path exists with the same payload/handler but is OFF by default — USE_WS in cockpit.js)
   → Flask updates lock-guarded intent + deadman timestamp
   → background sender thread @ 20 Hz → build_generated_command_packet()
@@ -335,9 +335,12 @@ fine-aim level** (0.8 × 0.01 → int16 262 — small, but well clear of zero; t
 10 %). The boot default is the level with the **highest percent** (`Settings.default_speed_index`), an
 argmax rather than the last entry, so the list can be ordered by key instead of by speed.
 
-Picking any level also **clears the key-4 `slow` flag** (`FLAGS1_SLOW`) client-side: both are ways to slow
-the turret, and a latched hardware SLOW would keep scaling down the level the operator just selected. The
-server does not enforce this — the browser owns the intent and simply stops sending `slow: true`.
+`1`/`2`/`3` are the **only** number keys the cockpit binds. The former key-4 hardware SLOW toggle
+(`FLAGS1_SLOW`) and key-5 camera-drive mode (the `cameras_p` axis, `[camera]` in `settings.toml`) have been
+removed: the command stream never sets the SLOW flag and always sends `cameras_p = 0`. Both definitions
+still live in [`rws_control.py`](../rws_control.py) — that is the wire protocol, also used by the TTY
+controller — and `/api/status` still serves the turret's *reported* camera angle as `camera_angle_deg`,
+but nothing in the UI renders it any more.
 
 **Instant camera switching:** the client pre-connects a persistent `RTCPeerConnection` + its own
 `<video>` per camera at load (STUN dropped — LAN candidates are local); `TAB` only flips which
@@ -350,8 +353,8 @@ pending hardware validation; `POST /api/input` is the active path.
 
 HTTP routes ([`routes.py`](../services/web/app/routes.py)): `GET /` (cockpit page), `GET /healthz`,
 `GET`/`POST /login`, `GET /logout`,
-`POST /api/input` (JSON intent incl. `speed_level`, `slow`, `camera_mode`, `rangefinder` → controller, 204; active control path), `GET /api/status` (HUD snapshot,
-incl. `track_active`, `speed_level`, `speed_levels`, `slow`, `camera_mode`, `rangefinder_seq`, and turret telemetry: `angle_rot_deg`/`angle_ele_deg`,
+`POST /api/input` (JSON intent incl. `speed_level`, `rangefinder` → controller, 204; active control path), `GET /api/status` (HUD snapshot,
+incl. `track_active`, `speed_level`, `speed_levels`, `rangefinder_seq`, and turret telemetry: `angle_rot_deg`/`angle_ele_deg`,
 `camera_angle_deg`, `distance_m`, `battery_percent`/`battery_voltage`, `motor_temp`, `motor_current`,
 `motor_voltage`, `motor_rpm`, `voltage_fire`, `voltage_cpu`), `GET`/`POST /api/crosshair`,
 `GET`/`POST /api/network-settings` (video profiles + active mode),

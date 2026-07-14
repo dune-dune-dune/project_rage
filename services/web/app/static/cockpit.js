@@ -12,9 +12,8 @@ const SPEED =
 const intent = {
   up: false, down: false, left: false, right: false,
   safety: false, fire: false,
-  // 4 = hardware slow/precise mode (toggle); 5 = camera-drive mode (toggle, W/S
-  // steer the camera axis); Shift = request rangefinder measurements (held).
-  slow: false, camera_mode: false, rangefinder: false,
+  // Shift = request rangefinder measurements (held).
+  rangefinder: false,
   fire_mode: FIRE_MODES.includes(window.__FIRE_MODE__) ? window.__FIRE_MODE__ : "short",
   speed_level: SPEED.current,
 };
@@ -125,24 +124,13 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.code === "KeyQ") { zoomBy(+ZOOM_STEP); e.preventDefault(); return; }
   if (e.code === "KeyE") { zoomBy(-ZOOM_STEP); e.preventDefault(); return; }
-  // 4 toggles the hardware slow/precise mode; 5 toggles camera-drive mode.
-  // Handled before the speed-level digits below, which return for any Digit1-9.
-  if (e.code === "Digit4" || e.code === "Numpad4") {
-    intent.slow = !intent.slow; dirty = true; e.preventDefault(); return;
-  }
-  if (e.code === "Digit5" || e.code === "Numpad5") {
-    intent.camera_mode = !intent.camera_mode; dirty = true; e.preventDefault(); return;
-  }
-  // Number keys 1..N pick the rotation-speed level (top row and numpad):
-  // 1 = 100%, 2 = 50%, 3 = 1% (fine aim). Picking a level also clears the key-4
-  // hardware slow mode — the two are competing ways to slow the turret down, and
-  // leaving `slow` latched would silently scale the level the operator just chose.
+  // Number keys pick the rotation-speed level (top row and numpad):
+  // 1 = 100%, 2 = 50%, 3 = 1% (fine aim). Nothing else is bound to a digit.
   const digit = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
   if (digit) {
     const n = parseInt(digit[1], 10);
     if (n >= 1 && n <= SPEED.levels.length) {
       intent.speed_level = n;
-      intent.slow = false;
       dirty = true;
       e.preventDefault();
     }
@@ -231,24 +219,12 @@ const batteryEl = document.getElementById("battery");
 const moTempEl = document.getElementById("motemp");
 const moCurEl = document.getElementById("mocur");
 const distEl = document.getElementById("cp-dist"); // rangefinder → crosshair panel
-const distBarEl = document.getElementById("dist-bar"); // rangefinder → bottom bar (dedicated field)
 const fireModeEl = document.getElementById("firemode") || noopBadge();
 const speedEl = document.getElementById("speed") || noopBadge();
 const speedBarEl = document.getElementById("speed-bar"); // speed level → bottom telemetry bar
 const zoomEl = document.getElementById("cp-zoom"); // digital zoom → crosshair panel
 const safetyIconEl = document.getElementById("cp-safety"); // safety padlock → crosshair panel
 const fireModeIconEl = document.getElementById("cp-firemode"); // fire-mode marks → crosshair panel
-// Extra telemetry-bar readouts (protocol fields surfaced in the bottom bar).
-const camPosEl = document.getElementById("cam-pos");     // camera-axis feedback angle
-const voltFireEl = document.getElementById("volt-fire"); // fire-circuit voltage (readiness)
-const voltCpuEl = document.getElementById("volt-cpu");   // compute-board voltage
-const moVoltEl = document.getElementById("mo-volt");     // per-motor voltage x/y
-const moRpmEl = document.getElementById("mo-rpm");       // per-motor rpm x/y
-// Crosshair-panel mode indicators for the new command toggles.
-const slowIconEl = document.getElementById("cp-slow");   // slow/precise mode badge
-const camIconEl = document.getElementById("cp-cammode"); // camera-drive mode badge
-// Below this fire-circuit voltage the readout pulses red (system not ready to fire).
-const FIRE_VOLTAGE_MIN = 20;
 const keyEls = {};
 document.querySelectorAll(".key").forEach((el) => (keyEls[el.dataset.k] = el));
 
@@ -353,45 +329,11 @@ async function pollStatus() {
     moCurEl.textContent = pair(s.motor_current, "A", 2);
     moCurEl.classList.toggle("stale", !s.motor_current || (s.motor_current.x === null && s.motor_current.y === null));
 
-    // Rangefinder distance → crosshair panel (distance_m: TF03 on the Jetson).
+    // Rangefinder distance → crosshair panel only (distance_m: TF03 on the Jetson).
+    // The bottom bar no longer carries a distance field; /api/status still serves
+    // both distance_m and distance_turret_m.
     distEl.textContent = num(s.distance_m, " м", 1);
     distEl.classList.toggle("stale", s.distance_m === null || s.distance_m === undefined);
-    // Dedicated bottom-bar field: the TURRET-protocol distance, never the TF03.
-    if (distBarEl) {
-      const dt = s.distance_turret_m;
-      distBarEl.textContent = num(dt, " м", 1);
-      distBarEl.classList.toggle("stale", dt === null || dt === undefined);
-    }
-
-    // --- Extra protocol telemetry in the bottom bar ---
-    if (camPosEl) {
-      const camAng = s.camera_angle_deg;
-      camPosEl.textContent = num(camAng, "°", 0);
-      camPosEl.classList.toggle("stale", typeof camAng !== "number");
-    }
-    if (voltFireEl) {
-      const vf = s.voltage_fire;
-      voltFireEl.textContent = num(vf, "V", 1);
-      voltFireEl.classList.toggle("stale", typeof vf !== "number");
-      // Pulse red when the fire circuit is below the ready threshold.
-      voltFireEl.classList.toggle("armed", typeof vf === "number" && vf < FIRE_VOLTAGE_MIN);
-    }
-    if (voltCpuEl) {
-      const vc = s.voltage_cpu;
-      voltCpuEl.textContent = num(vc, "V", 1);
-      voltCpuEl.classList.toggle("stale", typeof vc !== "number");
-    }
-    if (moVoltEl) {
-      moVoltEl.textContent = pair(s.motor_voltage, "V", 1);
-      moVoltEl.classList.toggle("stale", !s.motor_voltage || (s.motor_voltage.x === null && s.motor_voltage.y === null));
-    }
-    if (moRpmEl) {
-      moRpmEl.textContent = pair(s.motor_rpm, "", 0);
-      moRpmEl.classList.toggle("stale", !s.motor_rpm || (s.motor_rpm.x === null && s.motor_rpm.y === null));
-    }
-    // Crosshair-panel mode badges for the slow / camera toggles.
-    if (slowIconEl) slowIconEl.classList.toggle("off", !s.slow);
-    if (camIconEl) camIconEl.classList.toggle("off", !s.camera_mode);
   } catch (_) {}
 }
 setInterval(() => {

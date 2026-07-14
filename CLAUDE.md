@@ -117,12 +117,11 @@ python3 services/rws_bridge/src/main.py                                # bridge,
 `1`/`2`/`3` = rotation-speed level (velocity multiplier from `[control] speed_levels` = `[100, 50, 1]`:
 `1` = **100 % (boot default)**, `2` = 50 %, `3` = **1 % fine aim**; the default is an *argmax* over the
 list — `Settings.default_speed_index` — not its last entry, so the list can be ordered by key rather than
-by speed; auto-track is unaffected). Pressing any of `1`/`2`/`3` **clears the key-4 SLOW mode**
-(`cockpit.js` zeroes `intent.slow`): the two are competing ways to slow the turret, and a latched `slow`
-would silently scale the level the operator just picked. `4` = toggle **SLOW/precise** mode
-(`FLAGS1_SLOW`; hardware slow-motion, gates nothing), `5` = toggle **camera-drive mode** (while on, W/S steer the physical
-camera axis `cameras_p` at `[camera] rate_deg_s`, clamped to `min_deg`..`max_deg`, and the turret
-elevation holds; aim-only), `F` = safety toggle (**gates firing only**),
+by speed; auto-track is unaffected). **`1`/`2`/`3` are the only number keys the cockpit binds** — the
+former key-4 hardware SLOW toggle (`FLAGS1_SLOW`) and key-5 camera-drive mode (`cameras_p`) were removed;
+the command stream never sets either now (`cameras_p` is always 0), and the `FLAGS1_SLOW`/`cameras_p`
+definitions survive only in `rws_control.py`, which is the wire protocol shared with the TTY controller.
+`F` = safety toggle (**gates firing only**),
 `Space` = hold to fire, `Shift` = hold to **range-find** (edge-paced `rangefinder_seq`, spacing
 `[control] rangefinder_measure_interval_ms`; aim-only), `M` = cycle fire mode
 (short/medium/manual), `Q`/`E` = digital zoom in/out, `TAB` = cycle camera, `I` = cycle AI mode
@@ -134,34 +133,31 @@ a drone. The ⚙ button (top-left) opens a dropdown of settings panels: **мап
 in px, Custom motion threshold %, `/api/ai-settings`), **мережа** (see below) and **алерти** (placeholder).
 All of them persist to SQLite (`services/web/data/cockpit.db`), not to JSON files.
 A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
-bottom edge, styled in `cockpit.css`) shows groups, each an SVG icon + label + value:
+bottom edge, styled in `cockpit.css`) shows **five** groups, each an SVG icon + label + value:
 battery (%+V, `#battery`, whole item pulses red under 15%), motor temps (`#motemp` X/Y),
-motor currents (`#mocur` X/Y), speed level (`#speed-bar`), **fire-circuit voltage**
-(`#volt-fire`, «U ПОСТРІЛУ», from `voltage_fire`; pulses red under `FIRE_VOLTAGE_MIN`=20 V =
-system not ready to fire), **CPU voltage** (`#volt-cpu`), **per-motor voltage** (`#mo-volt` X/Y,
-from `voltage_x/y`), **motor RPM** (`#mo-rpm` X/Y, from `rpm_x/y`), **rangefinder distance**
-(`#dist-bar`, «ДАЛЕКОМІР», from `distance_turret_m` — **always** the turret's own status-reply
-`distance_mm`, never the serial TF03, unlike the crosshair `#cp-dist` which follows `distance_m`),
-**camera-axis position** (`#cam-pos`, from the status reply `cameras_p` → `camera_angle_deg`), and a
+motor currents (`#mocur` X/Y), speed level (`#speed-bar`), and a
 **«Статус підключення»** group with two coloured dots — turret
 (`#dot-turret`, green/red from `s.link`/`dry_run`/`bind_error`) and video (`#dot-video`, green/red from
 the active camera's `RTCPeerConnection.connectionState`). Each dot's hover tooltip (`title`) shows
 «Статус турелі/відео: онлайн/офлайн» (`setDot`/`paintVideo` in `cockpit.js`, `.ok`/`.bad` classes);
 telemetry values dim (`.stale`) until their reply arrives. The bar is an opaque overlay over the video's
 bottom edge (the video stays full-size behind it, so crosshair/AI aim geometry is untouched); `#hud` sits
-just above it. Azimuth/elevation are no longer shown in the bar but still cached (`lastAzDeg`/`lastElDeg`)
-for the map widgets. A small **crosshair status panel** (`#cross-panel`, a child of `#crosshair` so it
+just above it. Fields deliberately **not** in the bar (though `/api/status` still serves them all):
+azimuth/elevation — cached in `lastAzDeg`/`lastElDeg` for the map widgets; fire-circuit voltage
+(`voltage_fire`), CPU voltage (`voltage_cpu`), per-motor voltage (`voltage_x/y`), motor RPM (`rpm_x/y`),
+the turret's own rangefinder distance (`distance_turret_m`) and the camera-axis angle
+(`camera_angle_deg`) — all removed from the UI; and `distance_m`, which is shown at the crosshair
+(`#cp-dist`), not in the bar. A small **crosshair status panel** (`#cross-panel`, a child of `#crosshair` so it
 tracks the reticle offset) sits at the crosshair's lower-right and shows the rangefinder distance
 (`#cp-dist`, from `/api/status.distance_m`; on the Jetson this is the serial **Benewake TF03-180**
 LiDAR — see below — otherwise the turret's own status-reply distance) plus the camera lens type
 (`#cp-camtype`: CAM 95 → Ширококутна, CAM 96 → Вузькокутна via
 `cameraKind`) and digital zoom (`#cp-zoom`). Below the camera line a `#cp-state` row shows boxed
-indicators in order **safety · AI · track · slow · camera · fire-mode**: a **safety padlock** (`#cp-safety`: closed+green
+indicators in order **safety · AI · track · fire-mode**: a **safety padlock** (`#cp-safety`: closed+green
 outline when safe, open+red outline when armed — synced to `s.safety_off` in `pollStatus`, which also
 recolours the reticle green/red via `crosshairEl.style.color`); an **AI square** (`#cp-ai`: grey box +
 hand icon = manual/OFF, green «AI»/«AI+» = YOLO/custom); a **track square** (`#cp-track`: grey «T» off,
-green on); a **slow square** (`#cp-slow`: «S», green when SLOW mode on, from `s.slow`); a **camera
-square** (`#cp-cammode`: «C», green when camera-drive mode on, from `s.camera_mode`); and a **fire-mode box** (`#cp-fire` wrapping `#cp-firemode`, `data-mode` set in `paintKeys`:
+green on); and a **fire-mode box** (`#cp-fire` wrapping `#cp-firemode`, `data-mode` set in `paintKeys`:
 `•` short / `•••` medium / `▬` manual). AI/track mirror the `#ai`/`#track` badges and are updated by
 `AI.setBadges()` in `ai.js` (`.off` class toggles grey↔green; `#cp-ai`/`#cp-track`/`#cp-fire` are
 `<div>`s, so `classList` works — unlike the `<svg>` `#cp-safety`, whose class must be set via
@@ -261,7 +257,7 @@ model. In brief:
   login gate (`COCKPIT_PIN` in `.env`) protects all routes except `/healthz`/`/login`/static.
   Rotation speed is switchable at runtime with keys `1`/`2`/`3` (`speed_level` on `/api/input`, levels from
   `[control] speed_levels` = `[100, 50, 1]`; the boot default is the highest percent,
-  `Settings.default_speed_index`; choosing a level also clears the key-4 `slow` flag). The one-time **jerk at movement start** was traced to the position channel:
+  `Settings.default_speed_index`). The one-time **jerk at movement start** was traced to the position channel:
   the cockpit used to toggle the `ROT_P`/`ELE_P` valid bits off→on and jump the target 0→±π on the first
   move packet. It now mirrors the reference — **P valid bits stay on continuously**, holding the turret's
   *current* angle (read from status replies) when idle and leading it by a modest amount

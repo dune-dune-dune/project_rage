@@ -1,6 +1,12 @@
-"""Tests for the protocol features added to the cockpit: SLOW mode (key 4),
-camera-drive mode (key 5), the held-Shift rangefinder trigger, and the extended
-telemetry surfaced in /api/status."""
+"""Tests for the protocol features the cockpit uses: the held-Shift rangefinder
+trigger and the extended telemetry surfaced in /api/status.
+
+The cockpit no longer drives the SLOW flag or the camera axis (the key-4 / key-5
+modes were removed), so the command stream must never set either — the two tests
+below are regression guards for exactly that. `FLAGS1_SLOW` / `cameras_p` still
+exist in `rws_control.py`: that is the wire protocol, shared with the TTY
+controller.
+"""
 
 from __future__ import annotations
 
@@ -12,65 +18,26 @@ from app.turret import TurretController  # noqa: F401  (ensures rws_control is i
 import rws_control
 
 
-_FIRE_OFF = b"\x00\x00"
-
-
 def _intent_at(controller, now):
     return controller._read_intent(now)
 
 
-def test_slow_flag_off_by_default(controller):
-    controller.apply_input({"right": True})
+def test_slow_flag_is_never_set(controller):
+    controller.apply_input({"right": True, "slow": True})  # stale clients may still send it
     now = time.monotonic()
     packet = controller._build_packet(_intent_at(controller, now), (False, 0.0, 0.0), now)
     assert not (packet.flags1 & rws_control.FLAGS1_SLOW)
 
 
-def test_slow_flag_set_when_requested(controller):
-    controller.apply_input({"slow": True})
-    now = time.monotonic()
-    packet = controller._build_packet(_intent_at(controller, now), (False, 0.0, 0.0), now)
-    assert packet.flags1 & rws_control.FLAGS1_SLOW
-    # SLOW never touches firing.
-    assert packet.fire == _FIRE_OFF
-
-
-def test_camera_mode_drives_cameras_p_and_holds_elevation(controller):
+def test_camera_axis_is_never_commanded(controller):
     controller.apply_input({"up": True, "camera_mode": True})
     now = time.monotonic()
     intent = _intent_at(controller, now)
-    # A few ticks integrate the camera target upward while the turret elevation
-    # velocity stays zero (W/S steer the camera, not the turret, in camera mode).
     packet = None
     for _ in range(5):
         packet = controller._build_packet(intent, (False, 0.0, 0.0), now)
-    assert packet.cameras_p > 0
-    assert packet.elevation_v == 0
-
-
-def test_camera_target_clamps_to_max(controller):
-    controller.apply_input({"up": True, "camera_mode": True})
-    now = time.monotonic()
-    intent = _intent_at(controller, now)
-    for _ in range(2000):  # far more than needed to reach the clamp
-        controller._build_packet(intent, (False, 0.0, 0.0), now)
-    assert controller._camera_p == controller._s.camera_max_rad
-
-
-def test_camera_target_held_when_mode_off(controller):
-    # Drive the camera up a bit, then release camera mode: the target is held.
-    controller.apply_input({"up": True, "camera_mode": True})
-    now = time.monotonic()
-    intent = _intent_at(controller, now)
-    for _ in range(5):
-        controller._build_packet(intent, (False, 0.0, 0.0), now)
-    held = controller._camera_p
-    assert held > 0
-    controller.apply_input({})  # camera mode off, no keys
-    now2 = time.monotonic()
-    packet = controller._build_packet(_intent_at(controller, now2), (False, 0.0, 0.0), now2)
-    assert controller._camera_p == held
-    assert packet.cameras_p == rws_control.encode_angle_rad_to_packet_s32(held)
+    assert packet.cameras_p == 0
+    assert packet.elevation_v > 0  # W drives the TURRET elevation, always
 
 
 def test_rangefinder_seq_paced_while_held(controller):
