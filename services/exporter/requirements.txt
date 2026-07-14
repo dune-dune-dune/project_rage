@@ -1,0 +1,7 @@
+# The exporter is the ONLY place torch lives. The cockpit runtime stays torch-free
+# (services/web/requirements.txt) — see services/exporter/README.md for why.
+ultralytics>=8.1
+onnx>=1.15
+onnxslim>=0.1
+flask>=3.0
+gunicorn>=21.2

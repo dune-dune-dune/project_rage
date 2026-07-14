@@ -339,6 +339,65 @@ html, body {
 }
 .menu-panel button:hover { background: rgba(255, 255, 255, 0.18); }
 
+/* --- AI model library (⚙ -> ШІ модель) ------------------------------------
+   The panel is only 240px wide, so a model row is a tight three-column grid:
+   the active-model radio, a name + metadata block that may wrap, and the
+   rename/delete buttons. */
+.model-list { display: flex; flex-direction: column; gap: 6px; }
+.model-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+}
+.model-row.active { border-color: rgba(56, 255, 158, 0.55); background: rgba(56, 255, 158, 0.08); }
+.model-row input[type="radio"] { margin: 2px 0 0; cursor: pointer; }
+.model-row input[type="radio"]:disabled { cursor: not-allowed; opacity: 0.4; }
+.model-body { min-width: 0; }
+.model-name { font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.model-meta { font-size: 10px; opacity: 0.7; line-height: 1.35; overflow-wrap: anywhere; }
+.model-status { font-weight: 700; }
+.model-status.ready { color: #38ff9e; }
+.model-status.error { color: #ff5a5a; }
+.model-status.pending,
+.model-status.converting { color: #ffc14d; }
+.model-actions { display: flex; gap: 2px; }
+.model-actions button { padding: 2px 6px; font-size: 12px; line-height: 1; }
+
+.model-upload { display: flex; flex-direction: column; gap: 6px; }
+.model-upload input[type="file"] { font-size: 11px; color: #e8f0f2; }
+.model-upload input[type="file"]::file-selector-button {
+  margin-right: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.1);
+  color: #e8f0f2;
+  font-size: 11px;
+  cursor: pointer;
+}
+.model-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+.model-progress[hidden] { display: none; }
+#model-progress-bar { height: 100%; width: 0; background: #38ff9e; transition: width 0.1s linear; }
+.model-upload .sp-note.bad { color: #ff5a5a; opacity: 1; }
+
+/* Readiness readout: model / ONNX engine / exporter. */
+.ai-state { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+.ai-state-row { display: flex; justify-content: space-between; gap: 8px; }
+.ai-state-key { opacity: 0.65; white-space: nowrap; }
+.ai-state-val { text-align: right; overflow-wrap: anywhere; }
+.ai-state-val.ok { color: #38ff9e; }
+.ai-state-val.bad { color: #ff5a5a; }
+
 /* Turret emblem marker (Leaflet divIcon) — strip the default white box. */
 .turret-marker { background: transparent; border: none; }
 

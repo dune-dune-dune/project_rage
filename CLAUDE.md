@@ -46,19 +46,22 @@ project_rage/
 ├── services/
 │   ├── rws_bridge/           # Async turret driver: WebSocket control + 20 Hz RWS loop + lease watchdog
 │   │   └── src/{main,server,bridge,rws,protocol,config}.py
+│   ├── exporter/             # Sidecar: uploaded YOLO .pt → ONNX (the ONLY place torch lives)
+│   │   └── Dockerfile + requirements.txt + src/main.py + README.md   # POST /convert, :8901 (loopback)
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
-│   │   ├── app/{__init__,config,turret,routes,ws,db,store,wsgi}.py  # factory, settings, control, routes, /api/ws, SQLite, stores
-│   │   ├── app/migrations/*.sql  # schema + seed, applied once at startup (see its README)
-│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,heartbeat-worker.js,map.js,compass.js,cockpit.css}  # video + HUD + YOLO (worker) + bg-tab heartbeat worker + map/gauges + compass + PIN login
+│   │   ├── app/{__init__,config,turret,routes,ws,db,store,model_jobs,wsgi}.py  # factory, settings, control, routes, /api/ws, SQLite, stores, model conversion jobs
+│   │   ├── app/migrations/*.sql  # schema + seed + models table, applied once at startup (see its README)
+│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,models.js,heartbeat-worker.js,map.js,compass.js,cockpit.css}  # video + HUD + YOLO (worker) + AI model library + bg-tab heartbeat worker + map/gauges + compass + PIN login
 │   │   ├── app/static/vendor/  # onnxruntime-web (fetch_ort.sh) + leaflet/ (fetch_leaflet.sh)
-│   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # one-off: best.pt→best.onnx, fetch ORT web, vendor Leaflet
-│   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws, db, network)
-│   │   ├── requirements-dev.txt  # pytest (dev-only; runtime stays torch/pytest-free)
-│   │   ├── data/cockpit.db   # SQLite: crosshair, AI, map, video/network profiles (gitignored)
-│   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # YOLO weights (gitignored runtime data)
+│   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # offline: best.pt→best.onnx, fetch ORT web, vendor Leaflet
+│   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws, db, network, models)
+│   │   ├── requirements-dev.txt  # pytest (dev-only; the cockpit runtime stays torch/pytest-free)
+│   │   ├── data/cockpit.db   # SQLite: crosshair, AI, map, video/network profiles, model registry (gitignored)
+│   │   ├── data/models/<id>/{source.pt|source.onnx,model.onnx,classes.json}  # the AI model library (gitignored)
+│   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # pre-library weights; imported once as the builtin model
 │   │   ├── settings.toml     # control tuning (rates, ramp_ms, axes, fire, speed_levels, [track] AI servo) — NOT secrets
 │   │   ├── .env.example       # turret-network/deploy env template incl. COCKPIT_PIN/SECRET_KEY (user creates .env)
-│   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + video_gateway
+│   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + exporter (:8901) + video_gateway
 │   │   ├── docker-compose.jetson.yml # prod override: /dev/ttyUSB0 rangefinder passthrough + RANGEFINDER_ENABLED
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
 └── research/
@@ -95,14 +98,17 @@ python3 test_rws_control.py --dry-run --verbose --packet-limit 5
 
 # Web cockpit (Flask + Gunicorn). Copy services/web/.env.example → services/web/.env first.
 # Linux (full stack in Docker):
-cd services/web && docker compose up --build          # cockpit :8000 + video_gateway :8889
+cd services/web && docker compose up --build          # cockpit :8000 + exporter :8901 + video_gateway :8889
+#   NOTE: the exporter image installs ultralytics/torch (~2-3 GB) — the first build is SLOW.
+#   Skip it with `docker compose up cockpit video_gateway`; only .pt->ONNX conversion is lost
+#   (uploading a ready .onnx still works).
 # Jetson / production (everything in Docker + TF03 rangefinder passthrough):
 cd services/web && COMPOSE_FILE=docker-compose.yml:docker-compose.jetson.yml \
   docker compose up -d --build                        # adds /dev/ttyUSB0 + RANGEFINDER_ENABLED
 #   (this is exactly what .github/workflows/deploy.yml runs over WireGuard+SSH.)
 # macOS/Windows (Docker Desktop has no host networking → cockpit cannot bind the RWS
 # source IP in a container). Run video in Docker, cockpit natively on the host:
-cd services/web && docker compose up video_gateway    # video only
+cd services/web && docker compose up video_gateway exporter   # video + model converter
 cd services/web && ./run-native.sh                    # cockpit natively (auto venv on py3.11+)
 #   - run-native.sh / gunicorn.conf.py auto-load services/web/.env (python-dotenv).
 #   - the sender retries the socket bind until RWS_SRC_IP is configured on the host.
@@ -131,9 +137,27 @@ AI CUSTOM is a model-free pixel **motion** detector (frame differencing): pixels
 more than the ⚙ threshold are clustered into blobs, and blobs exceeding the min-object-size are flagged as
 a drone. The ⚙ button (top-left) opens a dropdown of settings panels: **мапа** (`/api/map-settings`),
 **приціл** (H/V offset у % від центру, крок **0.01 %** — повзунок + числове поле для точного вводу;
-`/api/crosshair`, значення клампиться до ±50 і округлюється до 2 знаків у `store.py`), **ШІ модель** (confidence threshold default 70 %, min object size
-in px, Custom motion threshold %, `/api/ai-settings`), **мережа** (see below) and **алерти** (placeholder).
+`/api/crosshair`, значення клампиться до ±50 і округлюється до 2 знаків у `store.py`), **ШІ модель**
+(бібліотека моделей — див. нижче — плюс confidence threshold default 70 %, min object size in px,
+Custom motion threshold %, `/api/ai-settings`), **мережа** (see below) and **алерти** (placeholder).
 All of them persist to SQLite (`services/web/data/cockpit.db`), not to JSON files.
+
+**AI model library (⚙ → «Налаштування ШІ моделі»).** The operator uploads new YOLO weights and switches
+between models **at runtime** — no SFTP, no container restart. A `.pt` is registered instantly (202) and
+converted to ONNX **asynchronously** by the `exporter` sidecar (`services/exporter/`, the only component
+with ultralytics/torch: a torch export inside the cockpit could stall the Gunicorn worker that owns the
+20 Hz turret loop and get it killed). The panel polls `/api/models` every 2 s until the row settles
+(`pending → converting → ready|error`). A ready-made **`.onnx` (+ optional `classes.json`) is accepted
+as-is with no exporter at all** — the recovery hatch when the sidecar is down; its input size then falls
+back to `[track].imgsz`, while the `.pt` path learns the real one from the checkpoint. Files live in
+`data/models/<id>/`; the registry is the `models` table (`0003_models.sql`) and only the *active* model id
+is a settings key. `data/model/best.onnx` is imported once as the **builtin** model, which can never be
+deleted (nor can the active one) — there is always a fallback. Switching is a **hot swap**
+(`AI.setModel()` re-inits the ONNX worker; **no page reload**, unlike the network panel), and the panel
+shows readiness explicitly: per-model status, the browser ONNX engine (`не запущено` / `завантаження` /
+`працює — N к/с, M мс` / `помилка: …`) and whether the exporter answers. This is all **AI ON (YOLO)** only
+— **AI CUSTOM is model-free and untouched**. `scripts/export_onnx.py` still does the same conversion
+offline.
 A **full-width instrument bar** (`#telemetry-bar`, a solid dark panel pinned to the
 bottom edge, styled in `cockpit.css`) shows **five** groups, each an SVG icon + label + value:
 battery (%+V, `#battery`, whole item pulses red under 15%), motor temps (`#motemp` X/Y),
@@ -252,10 +276,12 @@ It reads the same `<video>` the operator sees — so it always runs on the ACTIV
 `T` locks the target nearest the crosshair and POSTs a normalised aim velocity to `/api/track` at ~frame
 rate; the `TurretController` overrides its velocity axes with that proportional command (visual servo —
 no FOV calibration needed, no absolute angle). The aim point is the crosshair position **including its
-programmatic offset**, computed by inverting the `object-fit: cover` + zoom mapping. First convert
-`best.pt → best.onnx` and vendor ORT once: `python scripts/export_onnx.py` + `bash scripts/fetch_ort.sh`
-(deps in `requirements-export.txt`, dev-only — the cockpit runtime stays torch-free). Vendor Leaflet for
-the map widget once too: `bash scripts/fetch_leaflet.sh` (map *tiles* still need internet in the browser).
+programmatic offset**, computed by inverting the `object-fit: cover` + zoom mapping. The weights come from
+the **model library** (⚙ panel, see above) — upload a `.pt` and the `exporter` container converts it; the
+**cockpit runtime itself stays torch-free** (`requirements.txt` = flask/gunicorn/pyserial), which is why
+the conversion is a sidecar and not an in-process call. Vendor ORT once: `bash scripts/fetch_ort.sh`; and
+Leaflet for the map widget: `bash scripts/fetch_leaflet.sh` (map *tiles* still need internet in the
+browser).
 
 **TTY controller keys** (`test_rws_control.py`, [README.md](README.md)): `WASD` latch axes, arrows
 momentary move, `1`/`2`/`4`/`5` = enable/slow/reload/forceHome, `Backspace` = safetyARM, `7`/`8`/`9` =
@@ -302,7 +328,10 @@ model. In brief:
   `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
   `/api/ai-settings` (GET/POST conf + min size), `/api/map-settings` (GET/POST map origin lat/lon +
   north_correction), `/api/network-settings` (GET/POST video profiles + active mode),
-  `/assets/model.onnx`, `/assets/classes.json`;
+  `/api/models` (GET list + POST multipart upload of `.pt`/`.onnx`),
+  `/api/models/<id>/activate` (POST), `/api/models/<id>/rename` (POST), `/api/models/<id>` (DELETE),
+  `/assets/models/<id>/model.onnx` + `/assets/models/<id>/classes.json`,
+  `/assets/model.onnx`, `/assets/classes.json` (redirect to the active model);
   WebSocket route: `/api/ws` (control input). The PIN gate is registered app-wide
   (`before_app_request`) so it also protects `/api/ws`.
 - **AI auto-track** runs client-side (`ai.js`, ONNX Runtime Web); the server only receives the resulting
@@ -337,6 +366,11 @@ Details in [docs/architecture.md#known-gaps](docs/architecture.md#known-gaps).
 6. The rangefinder is bound to the fixed device path `/dev/ttyUSB0` (`docker-compose.jetson.yml`). USB
    enumeration order is not guaranteed across reboots/replugs — if a second USB-serial device appears the
    TF03 may land on `ttyUSB1`. Consider a stable `udev` symlink later; for now confirm the path on the Jetson.
+7. Converting an uploaded `.pt` needs the **`exporter` container built and running** (~2–3 GB image; the
+   Jetson builds it itself, so the first deploy after this feature is slow). Without it the panel shows
+   «Конвертер: недоступний» and a `.pt` upload ends in `помилка` — a ready-made `.onnx` upload still works.
+   A conversion in flight does **not** survive a deploy (`docker compose down` kills it); the row is reset
+   to `error` at startup rather than left stuck at `converting`.
 
 This list is a summary — the full, detailed gaps + safety caveats live in
 [docs/architecture.md](docs/architecture.md#known-gaps).

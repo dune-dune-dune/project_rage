@@ -15,8 +15,16 @@ from flask import Flask
 
 from .config import load_settings
 from .db import SettingsDb, import_legacy_json
+from .model_jobs import ModelJobs
 from .routes import bp
-from .store import AiSettingsStore, CrosshairStore, MapSettingsStore, NetworkStore
+from .store import (
+    AiSettingsStore,
+    CrosshairStore,
+    MapSettingsStore,
+    ModelStore,
+    NetworkStore,
+    import_builtin_model,
+)
 from .turret import TurretController
 from .ws import sock
 
@@ -55,6 +63,17 @@ def create_app() -> Flask:
     controller.start()
     atexit.register(controller.stop)
 
+    models = ModelStore(db, settings.models_dir, settings.ai_imgsz)
+    import_builtin_model(models, settings)
+    # A restart (every deploy does one) kills any conversion in flight: the job
+    # thread dies with the process and the sidecar's work is orphaned. Without
+    # this the row would sit at "converting" forever.
+    interrupted = models.fail_interrupted()
+    if interrupted:
+        log.warning("%d model conversion(s) were interrupted by a restart", interrupted)
+
+    # Uploaded weights are large; Flask buffers the whole multipart body, so cap it.
+    app.config["MAX_CONTENT_LENGTH"] = settings.max_upload_mb * 1024 * 1024
     app.config["SETTINGS"] = settings
     app.config["TURRET"] = controller
     app.config["DB"] = db
@@ -62,6 +81,8 @@ def create_app() -> Flask:
     app.config["AI_SETTINGS"] = AiSettingsStore(db)
     app.config["MAP_SETTINGS"] = MapSettingsStore(db)
     app.config["NETWORK"] = NetworkStore(db)
+    app.config["MODELS"] = models
+    app.config["MODEL_JOBS"] = ModelJobs(models, settings.exporter_url, settings.exporter_data_dir)
     app.register_blueprint(bp)
     sock.init_app(app)  # /api/ws control channel (auth via the same before_request gate)
     return app

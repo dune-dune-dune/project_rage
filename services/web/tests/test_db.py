@@ -18,7 +18,10 @@ def _versions(db_path) -> list[str]:
 def test_migrations_apply_on_a_fresh_database(tmp_path):
     path = tmp_path / "cockpit.db"
     applied = SettingsDb(str(path)).migrate()
-    assert applied == ["0001_init.sql", "0002_seed_network.sql"]
+    # Every shipped file runs, in filename order. Asserted as a prefix + sorted-ness
+    # rather than a literal list, so adding a migration does not fail this test.
+    assert applied[:2] == ["0001_init.sql", "0002_seed_network.sql"]
+    assert applied == sorted(applied)
     assert _versions(path) == applied
     # 0002 seeds the network profiles.
     assert SettingsDb(str(path)).get(KEY_NETWORK)["video_mode"] == "local"
@@ -32,12 +35,12 @@ def test_creates_missing_data_directory(tmp_path):
 
 def test_applied_migrations_are_skipped_on_the_next_boot(tmp_path):
     path = tmp_path / "cockpit.db"
-    SettingsDb(str(path)).migrate()
+    first = SettingsDb(str(path)).migrate()
     db = SettingsDb(str(path))
     db.put(KEY_CROSSHAIR, {"x": 7.0, "y": 0.0})
 
     assert db.migrate() == []  # nothing re-runs
-    assert len(_versions(path)) == 2
+    assert _versions(path) == first
     assert db.get(KEY_CROSSHAIR) == {"x": 7.0, "y": 0.0}  # and nothing is clobbered
 
 

@@ -55,6 +55,7 @@ self.onmessage = async (e) => {
     const tensor = new ort.Tensor("float32", input, [1, 3, imgsz, imgsz]);
 
     let output;
+    const startedAt = performance.now();
     try {
       const feeds = {};
       feeds[session.inputNames[0]] = tensor;
@@ -72,7 +73,8 @@ self.onmessage = async (e) => {
       // (YOLOv8 = [1, 4+nc, N]); useful if detection quality looks wrong.
       self.postMessage({ type: "info", dims: Array.from(output.dims), inputName: session.inputNames[0], outputName: session.outputNames[0] });
     }
-    self.postMessage({ type: "dets", dets, maxScore });
+    // ms: inference time, shown in the ⚙ panel's engine readout.
+    self.postMessage({ type: "dets", dets, maxScore, ms: Math.round(performance.now() - startedAt) });
   }
 };
 

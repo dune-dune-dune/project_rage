@@ -32,6 +32,29 @@ services:
     depends_on:
       - video_gateway
 
+  exporter:
+    # Converts uploaded YOLO weights (.pt) to ONNX for the cockpit's AI mode.
+    # Separate container because it is the only thing that needs ultralytics/torch:
+    # a torch export can peg the CPU for minutes, and the cockpit's single worker
+    # also runs the 20 Hz turret loop. See services/exporter/README.md.
+    build:
+      context: ../..
+      dockerfile: services/exporter/Dockerfile
+    restart: unless-stopped
+    # Published on LOOPBACK ONLY: the cockpit (host networking on Linux, or native
+    # on macOS) reaches it at 127.0.0.1:8901, while the turret LAN cannot — this
+    # endpoint writes files and has no auth of its own.
+    ports:
+      - "127.0.0.1:8901:8901"
+    # Never let an export starve the turret loop: at most one core, and the lowest
+    # CPU priority when cores are contended.
+    cpus: "1.0"
+    cpu_shares: 128
+    volumes:
+      # The same directory the cockpit mounts at /app/data — it writes the uploaded
+      # checkpoint here, the exporter writes model.onnx + classes.json back.
+      - ./data:/data
+
   video_gateway:
     # -ffmpeg variant bundles ffmpeg for the H264 transcode paths (cam*_h264).
     image: bluenviron/mediamtx:1.18.2-ffmpeg

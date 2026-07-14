@@ -14,10 +14,19 @@ keep their old shape, so the routes and the browser code are unchanged.
 
 from __future__ import annotations
 
+import json
+import logging
 import re
+import shutil
 import threading
+import uuid
+from contextlib import closing
+from datetime import datetime, timezone
+from pathlib import Path
 
-from .db import KEY_AI, KEY_CROSSHAIR, KEY_MAP, KEY_NETWORK, SettingsDb
+from .db import KEY_AI, KEY_CROSSHAIR, KEY_MAP, KEY_MODELS, KEY_NETWORK, SettingsDb
+
+log = logging.getLogger("cockpit.store")
 
 # Offset range in percent of the viewport, measured from centre. The operator
 # aims in 0.01 % steps, so the stored value keeps two decimals.
@@ -356,3 +365,287 @@ class NetworkStore:
                 if isinstance(path, str) and _PATH_RE.match(path.strip()):
                     data[name]["streams"][index] = {"label": _CAM_LABELS[index], "path": path.strip()}
         return data
+
+
+# --- AI model library ----------------------------------------------------------
+# The operator can upload new YOLO weights from the cockpit and switch between
+# them at runtime. Each model owns a directory under ``data/models/<id>/``:
+#
+#   source.pt                 the uploaded checkpoint, kept so it can be re-exported
+#   model.onnx                what the browser's ONNX Runtime actually loads (an
+#                             uploaded .onnx IS this file — it is not converted)
+#   classes.json              index -> class name, for the detection labels
+#
+# The registry (name, status, class names, size) is a real SQL table rather than
+# a settings blob — see app/migrations/0003_models.sql. Only which model is
+# *active* is a settings key (KEY_MODELS), so it round-trips like every other
+# operator setting.
+
+STATUS_PENDING = "pending"
+STATUS_CONVERTING = "converting"
+STATUS_READY = "ready"
+STATUS_ERROR = "error"
+
+SOURCE_PT = "pt"
+SOURCE_ONNX = "onnx"
+
+MODEL_FILENAME = "model.onnx"
+CLASSES_FILENAME = "classes.json"
+
+# Operator-facing label. Ukrainian letters are expected, so this is a blocklist of
+# the characters that would break the UI rather than an ASCII whitelist — the name
+# never reaches the filesystem (the directory is named by the generated id).
+_MODEL_NAME_MAX = 48
+_MODEL_NAME_BAD = re.compile(r"[\x00-\x1f<>]")
+# Generated server-side, and the ONLY thing interpolated into a filesystem path
+# and a URL — hence the strict whitelist.
+_MODEL_ID_RE = re.compile(r"^[a-z0-9]{6,32}$")
+
+_IMGSZ_MIN, _IMGSZ_MAX = 32, 4096
+
+
+def _clean_model_name(value: object, fallback: str = "модель") -> str:
+    name = value.strip() if isinstance(value, str) else ""
+    name = _MODEL_NAME_BAD.sub("", name)[:_MODEL_NAME_MAX].strip()
+    return name or fallback
+
+
+class ModelStore:
+    """The AI model library: rows in `models` + the active-model setting."""
+
+    def __init__(self, db: SettingsDb, models_dir: str, default_imgsz: int, key: str = KEY_MODELS) -> None:
+        self._db = db
+        self._dir = Path(models_dir)
+        self._default_imgsz = default_imgsz
+        self._key = key
+        self._lock = threading.Lock()
+
+    # --- paths -----------------------------------------------------------------
+
+    def dir_for(self, model_id: str) -> Path | None:
+        """The model's directory, or None if the id is not one we could have made."""
+        if not _MODEL_ID_RE.match(model_id or ""):
+            return None
+        return self._dir / model_id
+
+    def file_for(self, model_id: str, filename: str) -> Path | None:
+        if filename not in (MODEL_FILENAME, CLASSES_FILENAME):
+            return None
+        directory = self.dir_for(model_id)
+        return None if directory is None else directory / filename
+
+    # --- reads -----------------------------------------------------------------
+
+    def list(self) -> list[dict]:
+        with closing(self._db.connect()) as conn:
+            rows = conn.execute(
+                "SELECT id, name, status, error, source, imgsz, classes, size_bytes, builtin, created_at "
+                "FROM models ORDER BY builtin DESC, created_at ASC"
+            ).fetchall()
+        return [self._row(row) for row in rows]
+
+    def get(self, model_id: str) -> dict | None:
+        if not _MODEL_ID_RE.match(model_id or ""):
+            return None
+        with closing(self._db.connect()) as conn:
+            row = conn.execute(
+                "SELECT id, name, status, error, source, imgsz, classes, size_bytes, builtin, created_at "
+                "FROM models WHERE id = ?",
+                (model_id,),
+            ).fetchone()
+        return self._row(row) if row else None
+
+    def active(self) -> dict | None:
+        """The model the cockpit serves — or None when the library is empty.
+
+        Falls back rather than fails: a stored id that no longer exists (or is not
+        ready) degrades to the builtin model, then to any ready model. Losing the
+        active row must never leave the AI mode with no weights to load.
+        """
+        stored = (self._db.get(self._key) or {}).get("active")
+        models = self.list()
+        ready = [m for m in models if m["status"] == STATUS_READY]
+        if not ready:
+            return None
+        for model in ready:
+            if model["id"] == stored:
+                return model
+        for model in ready:
+            if model["builtin"]:
+                return model
+        return ready[0]
+
+    # --- writes ----------------------------------------------------------------
+
+    def set_active(self, model_id: str) -> dict | None:
+        model = self.get(model_id)
+        if model is None or model["status"] != STATUS_READY:
+            return None
+        with self._lock:
+            self._db.put(self._key, {"active": model["id"]})
+        return model
+
+    def create(self, name: object, source: str, builtin: bool = False) -> dict:
+        """Register a new model and create its (empty) directory.
+
+        The caller then writes the uploaded file into ``dir_for(id)`` and either
+        finishes it with :meth:`set_status` (a ready-made .onnx) or hands it to the
+        exporter (a .pt), which finishes it asynchronously.
+        """
+        model_id = uuid.uuid4().hex[:12]
+        row = {
+            "id": model_id,
+            "name": _clean_model_name(name),
+            "status": STATUS_PENDING,
+            "error": "",
+            "source": SOURCE_ONNX if source == SOURCE_ONNX else SOURCE_PT,
+            "imgsz": self._default_imgsz,
+            "classes": "{}",
+            "size_bytes": 0,
+            "builtin": 1 if builtin else 0,
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        (self._dir / model_id).mkdir(parents=True, exist_ok=True)
+        with self._db.write_lock, closing(self._db.connect()) as conn:
+            conn.execute(
+                "INSERT INTO models (id, name, status, error, source, imgsz, classes, size_bytes, builtin, created_at)"
+                " VALUES (:id, :name, :status, :error, :source, :imgsz, :classes, :size_bytes, :builtin, :created_at)",
+                row,
+            )
+        return self.get(model_id)  # type: ignore[return-value]  # just inserted
+
+    def set_status(
+        self,
+        model_id: str,
+        status: str,
+        error: str = "",
+        imgsz: object = None,
+        classes: object = None,
+        size_bytes: object = None,
+    ) -> dict | None:
+        if self.get(model_id) is None:
+            return None
+        fields: list[str] = ["status = ?", "error = ?"]
+        values: list[object] = [status, str(error or "")[:500]]
+        if imgsz is not None:
+            fields.append("imgsz = ?")
+            values.append(int(_clamp_range(imgsz, _IMGSZ_MIN, _IMGSZ_MAX, self._default_imgsz)))
+        if classes is not None:
+            fields.append("classes = ?")
+            values.append(json.dumps(_clean_classes(classes), ensure_ascii=False))
+        if size_bytes is not None:
+            fields.append("size_bytes = ?")
+            values.append(max(0, int(size_bytes)))
+        values.append(model_id)
+        with self._db.write_lock, closing(self._db.connect()) as conn:
+            conn.execute(f"UPDATE models SET {', '.join(fields)} WHERE id = ?", values)
+        return self.get(model_id)
+
+    def rename(self, model_id: str, name: object) -> dict | None:
+        model = self.get(model_id)
+        if model is None:
+            return None
+        with self._db.write_lock, closing(self._db.connect()) as conn:
+            conn.execute("UPDATE models SET name = ? WHERE id = ?", (_clean_model_name(name, model["name"]), model_id))
+        return self.get(model_id)
+
+    def delete(self, model_id: str) -> tuple[bool, str]:
+        """Remove a model and its files. Returns ``(ok, reason)``.
+
+        The builtin and the active model are protected: the cockpit must always
+        have weights to fall back to, and deleting what the browser is currently
+        running would 404 the next AI toggle.
+        """
+        model = self.get(model_id)
+        if model is None:
+            return False, "Модель не знайдено"
+        if model["builtin"]:
+            return False, "Базову модель видалити не можна"
+        active = self.active()
+        if active and active["id"] == model_id:
+            return False, "Спочатку зробіть активною іншу модель"
+        with self._db.write_lock, closing(self._db.connect()) as conn:
+            conn.execute("DELETE FROM models WHERE id = ?", (model_id,))
+        directory = self.dir_for(model_id)
+        if directory is not None:
+            shutil.rmtree(directory, ignore_errors=True)
+        return True, ""
+
+    def fail_interrupted(self) -> int:
+        """Mark conversions that a restart killed mid-flight as failed.
+
+        The job lives in a daemon thread and the export in a sidecar container, so
+        a `docker compose down` (every deploy) leaves the row stuck at
+        ``converting`` forever. Reset them at startup instead.
+        """
+        with self._db.write_lock, closing(self._db.connect()) as conn:
+            cursor = conn.execute(
+                "UPDATE models SET status = ?, error = ? WHERE status IN (?, ?)",
+                (STATUS_ERROR, "Конвертацію перервано перезапуском", STATUS_PENDING, STATUS_CONVERTING),
+            )
+            return cursor.rowcount or 0
+
+    # --- normalisation ---------------------------------------------------------
+
+    def _row(self, row: tuple) -> dict:
+        try:
+            classes = json.loads(row[6])
+        except ValueError:
+            classes = {}
+        return {
+            "id": row[0],
+            "name": row[1],
+            "status": row[2],
+            "error": row[3],
+            "source": row[4],
+            "imgsz": int(row[5]),
+            "classes": classes if isinstance(classes, dict) else {},
+            "size_bytes": int(row[7]),
+            "builtin": bool(row[8]),
+            "created_at": row[9],
+        }
+
+
+def _clean_classes(value: object) -> dict:
+    """Coerce a class map into {"0": "name"}; anything unusable becomes empty."""
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): str(name)[:64] for key, name in list(value.items())[:1000]}
+
+
+def import_builtin_model(store: ModelStore, settings) -> None:
+    """One-time import of the pre-library data/model/best.onnx into the library.
+
+    Copies (never moves) the file, so the old fixed path stays as a safety net.
+    Only runs while the library is empty — and since the builtin model cannot be
+    deleted, "empty" only ever means the first boot after this feature shipped.
+    """
+    if store.list():
+        return
+    source = Path(settings.model_file)
+    if not source.exists():
+        return
+    model = store.create("Базова модель", SOURCE_ONNX, builtin=True)
+    target_dir = store.dir_for(model["id"])
+    assert target_dir is not None  # id is generated by create()
+    shutil.copyfile(source, target_dir / MODEL_FILENAME)
+
+    classes: dict = {}
+    legacy_classes = Path(settings.classes_file)
+    if legacy_classes.exists():
+        try:
+            parsed = json.loads(legacy_classes.read_text())
+            classes = parsed if isinstance(parsed, dict) else {}
+        except (ValueError, OSError):
+            log.warning("legacy %s is unreadable — importing the model without class names", legacy_classes)
+    (target_dir / CLASSES_FILENAME).write_text(json.dumps(classes, ensure_ascii=False, indent=2))
+
+    store.set_status(
+        model["id"],
+        STATUS_READY,
+        imgsz=settings.ai_imgsz,
+        classes=classes,
+        size_bytes=source.stat().st_size,
+    )
+    store.set_active(model["id"])
+    log.info("imported %s into the model library as the builtin model", source.name)

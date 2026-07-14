@@ -19,7 +19,11 @@
 
 const AI = (() => {
   const cfg = window.__AI__ || {};
-  const IMGSZ = cfg.imgsz || 640;
+  // The ACTIVE model. Not const: the ⚙ panel swaps models at runtime (setModel),
+  // and a model exported at another input size letterboxes differently.
+  let modelUrl = cfg.model_url || null;
+  let classesUrl = cfg.classes_url || null;
+  let IMGSZ = cfg.imgsz || 640;
   const GAIN = typeof cfg.gain === "number" ? cfg.gain : 2.5;
   const DEADZONE = typeof cfg.deadzone === "number" ? cfg.deadzone : 0.02;
   const MAX_VEL = typeof cfg.max_velocity === "number" ? cfg.max_velocity : 0.5;
@@ -66,6 +70,19 @@ const AI = (() => {
   let classNames = {};
   let lastYoloLog = 0;     // throttle for the diagnostic console log
 
+  // Engine (ONNX Runtime) state, published to the ⚙ panel — until now a failed
+  // model load was invisible outside the console: the #ai badge it used to write
+  // to no longer exists in the DOM.
+  //   idle | loading | running | error
+  let engine = { state: "idle", error: "", fps: 0, ms: 0 };
+  const engineListeners = [];
+  let frameTimes = [];     // inference timestamps, for the FPS readout
+
+  function setEngine(patch) {
+    engine = Object.assign({}, engine, patch);
+    for (const listener of engineListeners) listener(engine);
+  }
+
   let mode = "off";        // "off" | "yolo" | "custom"
   let trackOn = false;
   let running = false;     // loop guard
@@ -83,17 +100,22 @@ const AI = (() => {
   function ensureWorker() {
     if (workerReady) return Promise.resolve();
     if (workerLoading) return workerLoading;
-    if (cfg.model_available === false) return Promise.reject(new Error("model-missing"));
+    if (!modelUrl) {
+      setEngine({ state: "error", error: "Немає активної моделі" });
+      return Promise.reject(new Error("model-missing"));
+    }
 
+    setEngine({ state: "loading", error: "", fps: 0, ms: 0 });
     // Versioned URL busts the (aggressive) worker cache after a code change.
     worker = new Worker(cfg.worker_url || "/static/ai-worker.js");
     workerLoading = new Promise((resolve, reject) => {
       worker.onmessage = (e) => {
         const m = e.data;
-        if (m.type === "ready") { workerReady = true; resolve(); }
+        if (m.type === "ready") { workerReady = true; setEngine({ state: "running" }); resolve(); }
         else if (m.type === "info") { console.log("AI model:", m.outputName, "dims", m.dims, "(YOLOv8 = [1, 4+nc, N])"); }
         else if (m.type === "dets") {
           busy = false;
+          trackRate(m.ms);
           if (mode === "yolo") {
             const dets = m.dets || [];
             handleDets(dets);
@@ -113,26 +135,70 @@ const AI = (() => {
         }
         else if (m.type === "error") {
           busy = false;
-          if (!workerReady) reject(new Error(m.message || "worker-error"));
-          else console.error("AI worker error", m.message);
+          const message = m.message || "worker-error";
+          setEngine({ state: "error", error: message });
+          if (!workerReady) reject(new Error(message));
+          else console.error("AI worker error", message);
         }
       };
       worker.onerror = (err) => {
         busy = false;
+        const message = (err && err.message) || "worker-error";
+        setEngine({ state: "error", error: message });
         if (!workerReady) reject(err);
         else console.error("AI worker error", err);
       };
-      worker.postMessage({ type: "init", modelUrl: cfg.model_url, imgsz: IMGSZ });
+      worker.postMessage({ type: "init", modelUrl: modelUrl, imgsz: IMGSZ });
     }).finally(() => { workerLoading = null; });
     return workerLoading;
   }
 
+  // Rolling FPS + last inference time, so the panel can show that detection is
+  // not just "on" but actually producing frames.
+  function trackRate(ms) {
+    const now = performance.now();
+    frameTimes.push(now);
+    while (frameTimes.length && now - frameTimes[0] > 2000) frameTimes.shift();
+    const span = frameTimes.length > 1 ? (now - frameTimes[0]) / 1000 : 0;
+    setEngine({
+      state: "running",
+      fps: span > 0 ? (frameTimes.length - 1) / span : 0,
+      ms: typeof ms === "number" ? ms : engine.ms,
+    });
+  }
+
   function loadClasses() {
-    if (!cfg.classes_url) return;
-    fetch(cfg.classes_url)
+    if (!classesUrl) { classNames = {}; return; }
+    fetch(classesUrl)
       .then((r) => (r.ok ? r.json() : {}))
       .then((j) => { classNames = j || {}; })
       .catch(() => {});
+  }
+
+  // Hot-swap the active model: tear the worker down and (if YOLO was running)
+  // bring it back up on the new weights. Deliberately NOT a page reload — unlike
+  // the network panel, nothing else about the document depends on the model, and
+  // reloading mid-operation would drop the video and the control heartbeat.
+  function setModel(model) {
+    modelUrl = (model && model.url) || null;
+    classesUrl = (model && model.classes_url) || null;
+    IMGSZ = (model && model.imgsz) || 640;
+    pre.width = IMGSZ;
+    pre.height = IMGSZ;
+
+    if (worker) { worker.terminate(); worker = null; }
+    workerReady = false;
+    workerLoading = null;
+    busy = false;
+    frameTimes = [];
+    setEngine({ state: "idle", error: "", fps: 0, ms: 0 });
+    loadClasses();
+
+    if (mode !== "yolo") return Promise.resolve();
+    return ensureWorker().catch((err) => {
+      console.error("AI model swap failed", err);
+      stop();
+    });
   }
 
   // -------------------------------------------------------------- toggles / HUD
@@ -181,8 +247,12 @@ const AI = (() => {
     if (trackOn) toggleTrack(); // releases the turret aim + stops the timer
     running = false;
     prevPixels = null;
+    frameTimes = [];
     clearCanvas();
     setBadges();
+    // Keep a load error visible after the mode drops — that is exactly the case
+    // the operator needs to read in the panel.
+    if (engine.state !== "error") setEngine({ state: "idle", fps: 0, ms: 0 });
   }
 
   function toggleTrack() {
@@ -585,7 +655,16 @@ const AI = (() => {
   initSettingsUI();
   setBadges();
 
-  return { toggle, toggleTrack, onCameraSwitch, isOn: () => mode !== "off" };
+  return {
+    toggle,
+    toggleTrack,
+    onCameraSwitch,
+    isOn: () => mode !== "off",
+    setModel,
+    // The ⚙ panel subscribes to the engine state (models.js). Called immediately
+    // with the current value so a late subscriber is never stuck on a stale "—".
+    onEngine: (listener) => { engineListeners.push(listener); listener(engine); },
+  };
 })();
 
 window.AI = AI;

@@ -118,10 +118,28 @@ class Settings:
     crosshair_file: str
     ai_settings_file: str
     map_settings_file: str
-    # Absolute path to the exported ONNX weights served to the browser, and the
-    # optional class-names sidecar written by the export script.
+    # Pre-model-library ONNX weights (data/model/best.onnx) and their class-names
+    # sidecar. Kept only as the source of the one-time import into the model
+    # library (app.store.import_builtin_model); the cockpit serves the ACTIVE
+    # model out of ``models_dir`` instead.
     model_file: str
     classes_file: str
+
+    # --- AI model library ---
+    # data/models/<id>/{source.pt|source.onnx, model.onnx, classes.json}. One
+    # directory per uploaded model; the registry itself lives in SQLite.
+    models_dir: str
+    # Upper bound on an uploaded weights file. Flask buffers the whole multipart
+    # body, so this must be set deliberately (413 above it).
+    max_upload_mb: int
+    # The exporter sidecar that owns ultralytics/torch and turns an uploaded .pt
+    # into ONNX. Deliberately a separate container: a torch export can peg the
+    # CPU for minutes, and this process also runs the 20 Hz turret loop.
+    exporter_url: str
+    # Where the exporter container sees the shared ./data bind mount. The two
+    # containers mount the same directory at different paths, so the cockpit must
+    # translate a model directory into the exporter's namespace before asking for it.
+    exporter_data_dir: str
 
     @property
     def period_seconds(self) -> float:
@@ -260,6 +278,10 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         map_settings_file=str(_data_file("map_settings.json")),
         model_file=str(_data_file("model", "best.onnx")),
         classes_file=str(_data_file("model", "classes.json")),
+        models_dir=str(_data_file("models")),
+        max_upload_mb=_env_int("MODEL_MAX_UPLOAD_MB", 512),
+        exporter_url=os.environ.get("EXPORTER_URL", "http://127.0.0.1:8901").rstrip("/"),
+        exporter_data_dir=os.environ.get("EXPORTER_DATA_DIR", "/data"),
     )
 
 

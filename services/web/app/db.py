@@ -40,6 +40,10 @@ KEY_CROSSHAIR = "crosshair"
 KEY_AI = "ai"
 KEY_MAP = "map"
 KEY_NETWORK = "network"
+# Which AI model is active: {"active": "<model id>"}. The models themselves live
+# in their own `models` table (0003_models.sql), not in a JSON blob — they carry
+# per-row metadata (status, classes, size) rather than one settings section.
+KEY_MODELS = "models"
 
 
 class SettingsDb:
@@ -53,6 +57,19 @@ class SettingsDb:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._migrations_dir = migrations_dir or _MIGRATIONS_DIR
         self._write_lock = threading.Lock()
+
+    @property
+    def write_lock(self) -> threading.Lock:
+        """Serialises writers that need more than one statement (see ModelStore)."""
+        return self._write_lock
+
+    def connect(self) -> sqlite3.Connection:
+        """A fresh short-lived connection for stores with their own SQL.
+
+        The key -> JSON blob helpers below cover the settings sections; the model
+        registry is a real table and issues its own statements.
+        """
+        return self._connect()
 
     def _connect(self) -> sqlite3.Connection:
         # isolation_level=None -> autocommit; transactions are opened explicitly

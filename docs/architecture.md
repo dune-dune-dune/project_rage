@@ -212,10 +212,48 @@ Key T (AI on) → on each result: pick target nearest the crosshair (then neares
     toward the frame centre as you zoom in. The two cameras therefore track slightly differently.
 - **Camera-agnostic.** Inference reads the same `<video>` element the operator sees, so `TAB` switching
   cameras (95 ↔ 96) needs no server change; a switch just drops the current target lock.
-- **Model conversion (one-off, offline).** `scripts/export_onnx.py` converts `data/model/best.pt` →
-  `best.onnx` (+ `classes.json`) with ultralytics (`requirements-export.txt`, dev-only);
-  `scripts/fetch_ort.sh` vendors onnxruntime-web into `app/static/vendor/` (served locally, no runtime CDN).
-  Detection thresholds (`conf`, `min_size`) persist to SQLite via `/api/ai-settings`.
+- **ONNX Runtime** is vendored once by `scripts/fetch_ort.sh` into `app/static/vendor/` (served locally,
+  no runtime CDN). Detection thresholds (`conf`, `min_size`) persist to SQLite via `/api/ai-settings`.
+
+### AI model library (upload / convert / switch)
+
+The operator uploads new YOLO weights from ⚙ → «Налаштування ШІ моделі» and switches between models at
+runtime; nothing needs SFTP or a container restart any more. Only **AI ON (YOLO)** uses a model — AI CUSTOM
+is a model-free pixel-motion detector.
+
+```
+browser ──multipart──▶ POST /api/models          (cockpit: writes the file, 202 immediately)
+                          │  data/models/<id>/source.pt  +  a row in `models` (status=pending)
+                          │  ModelJobs: one daemon thread, no CPU of its own
+                          └──POST /convert──▶ exporter container (ultralytics/torch)
+                                                 .pt → model.onnx + classes.json, same bind mount
+                          ◀── {ok, imgsz, classes} ──┘   status=ready
+browser polls GET /api/models every 2 s while a conversion is running
+```
+
+- **Storage.** One directory per model: `data/models/<id>/{source.pt|source.onnx, model.onnx,
+  classes.json}`. The registry (name, status, class names, input size, size on disk) is the `models` table
+  (`app/migrations/0003_models.sql`); only *which model is active* is a settings key. `data/` is a bind
+  mount, so uploads survive rebuilds and the deploy's `git reset --hard`.
+- **Why a separate `exporter` container** (`services/exporter/`): it is the only component that needs
+  ultralytics + torch (~2–3 GB). Inside the cockpit those would run in the same process as the **20 Hz
+  turret loop** — a CPU-pegged export can stop the Gunicorn worker heart-beating, and the arbiter kills it,
+  taking turret control with it. The sidecar is capped at one core with the lowest CPU priority
+  (`cpus`/`cpu_shares`) and published on `127.0.0.1:8901` only. See `services/exporter/README.md`.
+- **The `.onnx` escape hatch.** Uploading an already-exported `.onnx` (+ optional `classes.json`) needs no
+  exporter at all and is ready instantly — that is the recovery path when the sidecar is down or was never
+  built. Its input size falls back to `[track].imgsz`; only the `.pt` path learns the real one from the
+  checkpoint. `scripts/export_onnx.py` still does the same conversion offline.
+- **Fallbacks.** The pre-library `data/model/best.onnx` is imported once as the **builtin** model, which
+  can never be deleted — there is always something to fall back to. Neither the active model nor a model
+  that is not `ready` can be deleted or activated. A restart mid-conversion (every deploy does one) marks
+  the orphaned row `error` instead of leaving it stuck at `converting`.
+- **Switching is a hot swap**, not a reload: `AI.setModel()` terminates the ONNX worker and re-inits it on
+  the new weights, so the video and the control heartbeat are never interrupted.
+- **Readiness is visible.** The panel shows the state of each model (`готова` / `конвертується…` /
+  `помилка: …`), of the browser's ONNX engine (`не запущено` / `завантаження` / `працює — N к/с, M мс` /
+  `помилка`) and of the exporter. Before this, a failed model load only appeared in the console: the `#ai`
+  badge `ai.js` wrote those errors to had been removed from the DOM.
 
 ## Video path
 
@@ -335,6 +373,9 @@ Deployment/network/secrets come from `.env` (see [`.env.example`](../services/we
 | Log level | `LOG_LEVEL` | `info` |
 | Login PIN (7 digits) | `COCKPIT_PIN` | empty → login disabled (open) |
 | Session secret | `SECRET_KEY` | empty → ephemeral key (sessions reset on restart) |
+| Model exporter endpoint | `EXPORTER_URL` | `http://127.0.0.1:8901` |
+| Where the exporter sees `./data` | `EXPORTER_DATA_DIR` | `/data` |
+| Max uploaded weights (MB) | `MODEL_MAX_UPLOAD_MB` | `512` (→ `413` above it) |
 | MediaMTX advertised ICE hosts | `MEDIAMTX_HOSTS` (compose only) | `192.168.88.33,10.20.100.1` |
 | Settings data dir | `COCKPIT_DATA_DIR` | `services/web/data` |
 
@@ -408,8 +449,10 @@ incl. `track_active`, `speed_level`, `speed_levels`, `rangefinder_seq`, and turr
 `GET`/`POST /api/network-settings` (video profiles + active mode),
 `POST /api/track` (auto-aim velocity → controller, 204),
 `GET`/`POST /api/ai-settings` (conf, min size, Custom motion threshold, ego-motion max shift),
-`GET /assets/model.onnx` (exported weights),
-`GET /assets/classes.json` (class names).
+`GET`/`POST /api/models` (model library; POST = multipart upload of `.pt`/`.onnx` → 202/201),
+`POST /api/models/<id>/activate`, `POST /api/models/<id>/rename`, `DELETE /api/models/<id>`,
+`GET /assets/models/<id>/model.onnx` + `GET /assets/models/<id>/classes.json` (one model's files),
+`GET /assets/model.onnx` + `GET /assets/classes.json` (redirect to the **active** model; pre-library URLs).
 
 Gunicorn runs `app.wsgi:app` via [`gunicorn.conf.py`](../services/web/gunicorn.conf.py) (pins
 `workers=1`, reads `WEB_BIND`/`GUNICORN_THREADS`, and auto-loads `.env` through python-dotenv). The app
@@ -483,12 +526,14 @@ turret directly. The remaining gaps:
 6. **Stale reference stub.** `research/reverse_protocol/old/test_control.py` imports a `main` from a
    module `test_rws_control` that does not exist under `old/`. The old CLI's illustrative burst
    durations (100/1000/10000) do not match the real captured values (161/605/0).
-7. **AI mode needs a one-off build step.** `GET /assets/model.onnx` 404s until
-   `scripts/export_onnx.py` converts `data/model/best.pt` → `best.onnx`, and pressing `I` shows
-   `AI NO MODEL` / `AI ERROR` until both that and `scripts/fetch_ort.sh` (vendors onnxruntime-web into
-   `app/static/vendor/`) have run. `data/` and the vendored ORT files are gitignored/uncommitted, so a
-   fresh checkout or container must regenerate them. Browser inference speed depends on the client device
-   (single-thread WASM/SIMD); tracking tolerates a few Hz but a weak client will track sluggishly.
+7. **AI mode needs weights + the vendored ORT.** Weights are no longer a build step — upload them from
+   ⚙ → «Налаштування ШІ моделі» (see «AI model library» above), and the panel says plainly whether a model
+   is ready. But `scripts/fetch_ort.sh` (vendors onnxruntime-web into `app/static/vendor/`) still has to
+   have run, and an **empty library** (fresh `data/`, no `best.onnx` to import) means there is nothing to
+   activate until something is uploaded. Converting a `.pt` also needs the `exporter` container built
+   (~2–3 GB, slow first build on the Jetson) — without it, only ready-made `.onnx` uploads work. Browser
+   inference speed depends on the client device (single-thread WASM/SIMD); tracking tolerates a few Hz but
+   a weak client will track sluggishly.
 8. **Auto-track is uncalibrated and open-loop on direction sign.** With no camera FOV data the servo
    assumes image-right = turret-pan-right and image-down = tilt-down; if a camera is mounted mirrored the
    `gain` sign (or axis) would need flipping. It is aim-only and never fires, but it *does* move a real
