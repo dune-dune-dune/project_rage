@@ -1,9 +1,12 @@
 # Jetson (production) overrides for docker-compose.yml.
 #
 # Everything runs in Docker on the Jetson (Linux host networking works there).
-# This override adds the one thing that only exists in production: the Benewake
-# TF03-180 serial rangefinder on /dev/ttyUSB0. It is NOT in the base compose so a
-# local `docker compose up` never fails on a missing device.
+# This override adds the things that only exist in production:
+#   1. the Benewake TF03-180 serial rangefinder on /dev/ttyUSB0;
+#   2. the wg-targets WireGuard tunnel to the targets VM (10.31.0.100), used by
+#      the browser's live targets WebSocket feed (ws://10.31.0.100:8766).
+# Neither is in the base compose so a local `docker compose up` never fails on a
+# missing device or a missing tunnel config.
 #
 # Deploy (see .github/workflows/deploy.yml):
 #   cd services/web
@@ -22,3 +25,25 @@ services:
       RANGEFINDER_ENABLED: "true"
       RANGEFINDER_PORT: "/dev/ttyUSB0"
       RANGEFINDER_BAUD: "115200"
+      # Where the browser opens the live targets WebSocket (separate VM over the
+      # wg-targets tunnel). Override in .env if the address differs.
+      TARGETS_WS_HOST: "${TARGETS_WS_HOST:-10.31.0.100}"
+      TARGETS_WS_PORT: "${TARGETS_WS_PORT:-8766}"
+
+  wg-targets:
+    # Brings up a WireGuard tunnel to the targets VM on the HOST network namespace
+    # (network_mode: host), so the host-networked cockpit — and therefore the
+    # operator's browser routed through it — can reach ws://10.31.0.100:8766.
+    # This is a SEPARATE tunnel from the turret VPN (that one lives on the MikroTik
+    # router, not here). Its config, WITH a private key, lives in
+    # ./data/wg-targets.conf (git-ignored); copy wg-targets.conf.example to start.
+    image: linuxserver/wireguard:1.0.20210914
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    volumes:
+      # linuxserver/wireguard brings up every *.conf under /config/wg_confs.
+      - ./data/wg-targets.conf:/config/wg_confs/wg-targets.conf:ro

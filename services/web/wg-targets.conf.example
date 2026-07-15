@@ -1,0 +1,28 @@
+# WireGuard client tunnel to the TARGETS VM (live targets WebSocket feed).
+#
+# Copy this to data/wg-targets.conf and fill in the real keys/addresses. That
+# path is git-ignored (services/web/data/ is in .gitignore) and lives in the
+# ./data bind mount, so it survives rebuilds and the deploy's `git reset --hard`
+# — exactly like .env and cockpit.db. NEVER commit the real file: it holds the
+# private key.
+#
+# The wg-targets compose sidecar (docker-compose.jetson.yml) brings this up on
+# the HOST network namespace so the host-networked cockpit can reach the targets
+# server. This is a SEPARATE tunnel from the turret VPN (that one lives on the
+# MikroTik router). After editing, restart the stack:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.jetson.yml docker compose up -d wg-targets
+# Verify the route from the host:  nc -vz 10.31.0.100 8766
+
+[Interface]
+# This client's private key (generate: `wg genkey`), and its address inside the
+# targets VPN. Adjust to whatever the targets VM's WireGuard server assigns.
+PrivateKey = <this-client-private-key>
+Address = 10.31.0.2/32
+
+[Peer]
+# The targets VM's WireGuard server: its public key and reachable endpoint.
+PublicKey = <targets-server-public-key>
+Endpoint = <targets-vm-public-ip>:51820
+# Route the targets VPN subnet (which contains 10.31.0.100) through the tunnel.
+AllowedIPs = 10.31.0.0/24
+PersistentKeepalive = 25

@@ -62,6 +62,7 @@ def _asset_version() -> int:
     for name in (
         "ai.js", "ai-worker.js", "cockpit.js", "cockpit.css",
         "map.js", "compass.js", "heartbeat-worker.js", "models.js",
+        "ws-client.js", "targets.js",
     ):
         try:
             latest = max(latest, int(os.path.getmtime(os.path.join(static, name))))
@@ -129,6 +130,8 @@ def index():
         fire_mode=_controller().snapshot()["fire_mode"],
         speed=_controller().speed_config(),
         ai=_ai_config(settings),
+        targets_ws_host=settings.targets_ws_host,
+        targets_ws_port=settings.targets_ws_port,
         asset_version=_asset_version(),
     )
 

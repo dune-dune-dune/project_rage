@@ -61,6 +61,15 @@ class Settings:
     dry_run: bool
     salt: bytes
 
+    # --- Targets feed (separate VM, reached over its own WireGuard tunnel) ---
+    # The browser opens a WebSocket to this host:port for the live targets stream
+    # (see static/ws-client.js). It is NOT the cockpit host: the targets server
+    # lives on another VM (default 10.31.0.100), reachable only through the
+    # wg-targets tunnel brought up by the compose sidecar. Empty host => the client
+    # falls back to window.location.hostname (same host as the page).
+    targets_ws_host: str
+    targets_ws_port: int
+
     # --- Rangefinder (Benewake TF03-180, serial) ---
     # Only enabled on the Jetson (production), where the LiDAR is wired to a USB
     # serial port. When disabled, distance falls back to the turret status reply.
@@ -244,6 +253,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         dst_port=_env_int("RWS_DST_PORT", 7780),
         dry_run=_env_bool("RWS_DRY_RUN", True),
         salt=_load_salt(),
+        targets_ws_host=os.environ.get("TARGETS_WS_HOST", "10.31.0.100").strip(),
+        targets_ws_port=_env_int("TARGETS_WS_PORT", 8766),
         rangefinder_enabled=_env_bool("RANGEFINDER_ENABLED", False),
         rangefinder_port=os.environ.get("RANGEFINDER_PORT", "/dev/ttyUSB0"),
         rangefinder_baud=_env_int("RANGEFINDER_BAUD", 115200),

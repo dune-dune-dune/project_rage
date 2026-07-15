@@ -51,7 +51,7 @@ project_rage/
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
 │   │   ├── app/{__init__,config,turret,routes,ws,db,store,model_jobs,wsgi}.py  # factory, settings, control, routes, /api/ws, SQLite, stores, model conversion jobs
 │   │   ├── app/migrations/*.sql  # schema + seed + models table, applied once at startup (see its README)
-│   │   ├── app/templates/index.html + app/static/{cockpit.js,ai.js,ai-worker.js,models.js,heartbeat-worker.js,map.js,compass.js,cockpit.css}  # landing grid + video + HUD + YOLO (worker) + AI model library + bg-tab heartbeat worker + map/gauges + compass
+│   │   ├── app/templates/index.html + app/static/{cockpit.js,ai.js,ai-worker.js,models.js,heartbeat-worker.js,map.js,compass.js,ws-client.js,targets.js,cockpit.css}  # landing grid + video + HUD + YOLO (worker) + AI model library + bg-tab heartbeat worker + map/gauges + compass + targets WS client + target markers
 │   │   ├── app/static/vendor/  # onnxruntime-web (fetch_ort.sh) + leaflet/ (fetch_leaflet.sh)
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # offline: best.pt→best.onnx, fetch ORT web, vendor Leaflet
 │   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws, db, network, models)
@@ -61,8 +61,9 @@ project_rage/
 │   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # pre-library weights; imported once as the builtin model
 │   │   ├── settings.toml     # control tuning (rates, ramp_ms, axes, fire, speed_levels, [track] AI servo) — NOT secrets
 │   │   ├── .env.example       # turret-network/deploy env template (user creates .env; no auth — cockpit is open)
+│   │   ├── wg-targets.conf.example  # template for data/wg-targets.conf (WireGuard tunnel to the targets VM; user copies + fills keys)
 │   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + exporter (:8901) + video_gateway
-│   │   ├── docker-compose.jetson.yml # prod override: /dev/ttyUSB0 rangefinder passthrough + RANGEFINDER_ENABLED
+│   │   ├── docker-compose.jetson.yml # prod override: /dev/ttyUSB0 rangefinder passthrough + RANGEFINDER_ENABLED + wg-targets WireGuard sidecar (targets VM tunnel)
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
 └── research/
     └── reverse_protocol/
@@ -213,7 +214,20 @@ azimuth range and the elevation range with live needles. The map's own ⚙ (`#ma
 map to a settings form (only lat, lon, `north_correction`; Save → `POST /api/map-settings`, persisted in
 `cockpit.db`). Live angles come from `window.cockpit.azDeg`/`.elDeg` (cached by
 `pollStatus`, which calls `window.mapWidgets.update()` at 5 Hz). Bearing mapping:
-`bearing = angle_rot_deg + north_correction`.
+`bearing = angle_rot_deg + north_correction`. `map.js` exposes the Leaflet instance via a
+`window.mapWidgets.map` getter so `targets.js` can drop markers on it.
+
+**Live target markers (`ws-client.js` + `targets.js`):** a standalone WebSocket client
+(`window.TargetsWS`) opens `ws://<TARGETS_WS_HOST>:<TARGETS_WS_PORT>` (defaults `10.31.0.100:8766`,
+injected as `window.__TARGETS_WS_HOST__/__PORT__`; empty host → the page host) with auto-reconnect
+(exp. backoff), a staleness heartbeat, and reconnect on tab-visible/`online`. The targets server is a
+**separate VM** reached over its **own** WireGuard tunnel (`wg-targets`, distinct from the turret VPN on
+the MikroTik) — the `wg-targets` compose sidecar (`docker-compose.jetson.yml`, `network_mode: host` +
+`NET_ADMIN`) brings it up from `data/wg-targets.conf` (git-ignored; copy `wg-targets.conf.example`). It
+subscribes with `{type:'subscribe', mode:'targets_only'}`; each `{type:'status', targets:{…}}` frame is
+drawn by `targets.js:updateTargetMarkers()` as pulsing `L.divIcon` markers on the shared Leaflet map
+(FPV vs «Молнія» SVG chosen by `target_type_id`; styles in `cockpit.css`, `.target-marker*`). This is
+**display-only** — it never touches control/fire and is independent of the RWS command stream.
 
 **Compass (top-centre):** `compass.js` renders `#compass` — a horizontal scrolling
 degree tape (`#compass-tape`, SVG) with a boxed current-bearing readout above it

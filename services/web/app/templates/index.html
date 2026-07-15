@@ -379,6 +379,8 @@
     window.__AI__ = {{ ai | tojson }};
     window.__MAP__ = {{ map_settings | tojson }};
     window.__NETWORK__ = {{ network | tojson }};
+    window.__TARGETS_WS_HOST__ = {{ targets_ws_host | tojson }};
+    window.__TARGETS_WS_PORT__ = {{ targets_ws_port | tojson }};
     window.__ASSET_VERSION__ = {{ asset_version | tojson }};
   </script>
   <!-- ONNX Runtime Web is imported inside ai-worker.js (off the main thread). -->
@@ -391,5 +393,9 @@
   <!-- compass.js before map.js so window.compass exists when map.js first paints. -->
   <script src="{{ url_for('static', filename='compass.js') }}?v={{ asset_version }}"></script>
   <script src="{{ url_for('static', filename='map.js') }}?v={{ asset_version }}"></script>
+  <!-- targets.js draws the WS target feed as map markers; ws-client.js (window.TargetsWS)
+       and map.js (window.mapWidgets.map) must both load before it. -->
+  <script src="{{ url_for('static', filename='ws-client.js') }}?v={{ asset_version }}"></script>
+  <script src="{{ url_for('static', filename='targets.js') }}?v={{ asset_version }}"></script>
 </body>
 </html>
