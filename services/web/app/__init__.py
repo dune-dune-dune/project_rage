@@ -25,7 +25,6 @@ from .store import (
     NetworkStore,
     import_builtin_model,
 )
-from .targets import TargetsRelay
 from .turret import TurretController
 from .ws import sock
 
@@ -56,14 +55,6 @@ def create_app() -> Flask:
     controller.start()
     atexit.register(controller.stop)
 
-    # Relay the targets feed from the separate VM (over the wg-targets tunnel) so
-    # the browser can poll it from the cockpit's own origin. No-op unless enabled.
-    targets_relay = TargetsRelay(
-        settings.targets_ws_host, settings.targets_ws_port, settings.targets_enabled
-    )
-    targets_relay.start()
-    atexit.register(targets_relay.stop)
-
     models = ModelStore(db, settings.models_dir, settings.ai_imgsz)
     import_builtin_model(models, settings)
     # A restart (every deploy does one) kills any conversion in flight: the job
@@ -77,7 +68,6 @@ def create_app() -> Flask:
     app.config["MAX_CONTENT_LENGTH"] = settings.max_upload_mb * 1024 * 1024
     app.config["SETTINGS"] = settings
     app.config["TURRET"] = controller
-    app.config["TARGETS_RELAY"] = targets_relay
     app.config["DB"] = db
     app.config["CROSSHAIR"] = CrosshairStore(db)
     app.config["AI_SETTINGS"] = AiSettingsStore(db)

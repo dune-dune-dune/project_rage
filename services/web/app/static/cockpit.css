@@ -718,20 +718,3 @@ body.mode-grid #map-square {
   height: 100%;
 }
 body.mode-grid .map-gauges { display: none; }
-
-/* Live target markers (FPV / Молнія) on the Leaflet map — pulsing red-shadow blips. */
-.target-marker { background: none; border: none; }
-.target-marker-container {
-    display: flex; flex-direction: column; align-items: center; gap: 2px;
-}
-.target-marker .target-icon {
-    width: 30px; height: 30px; background-color: transparent; border-radius: 0;
-    display: flex; align-items: center; justify-content: center; position: relative;
-    filter: drop-shadow(0 2px 6px rgba(255, 68, 68, 0.6));
-    animation: target-marker-pulse 2.5s ease-in-out infinite;
-}
-@keyframes target-marker-pulse {
-    0%, 100% { transform: scale(1); opacity: 1; }
-    50%      { transform: scale(1.08); opacity: 0.9; }
-}
-.target-marker .target-icon:hover { animation: none; transform: scale(1.15); }

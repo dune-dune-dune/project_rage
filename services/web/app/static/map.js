@@ -309,6 +309,5 @@
   // Exposed for cockpit.js: update() drives live gauges/needle at 5 Hz;
   // fillForm() lets the top-left menu refresh the map inputs before showing;
   // relayout() re-measures the map after the grid<->control view toggle.
-  // `map` getter lets targets.js reach the Leaflet instance (it lives in this closure).
-  window.mapWidgets = { update, fillForm, relayout, get map() { return map; } };
+  window.mapWidgets = { update, fillForm, relayout };
 })();

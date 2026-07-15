@@ -391,8 +391,5 @@
   <!-- compass.js before map.js so window.compass exists when map.js first paints. -->
   <script src="{{ url_for('static', filename='compass.js') }}?v={{ asset_version }}"></script>
   <script src="{{ url_for('static', filename='map.js') }}?v={{ asset_version }}"></script>
-  <!-- targets.js polls /api/targets (the Jetson relays the feed from the targets
-       VM) and draws markers on the shared Leaflet map (window.mapWidgets.map). -->
-  <script src="{{ url_for('static', filename='targets.js') }}?v={{ asset_version }}"></script>
 </body>
 </html>
