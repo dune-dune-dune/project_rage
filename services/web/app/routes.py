@@ -42,6 +42,10 @@ def _network():
     return current_app.config["NETWORK"]
 
 
+def _drone():
+    return current_app.config["DRONE"]
+
+
 def _models():
     return current_app.config["MODELS"]
 
@@ -126,6 +130,7 @@ def index():
         dry_run=settings.dry_run,
         crosshair=_crosshair().load(),
         map_settings=_map_settings().load(),
+        drone=_drone().load(),
         fire_mode=_controller().snapshot()["fire_mode"],
         speed=_controller().speed_config(),
         ai=_ai_config(settings),
@@ -187,6 +192,22 @@ def api_network_settings_set():
     """
     payload = request.get_json(silent=True) or {}
     return jsonify(_network().save(payload))
+
+
+@bp.get("/api/drone-settings")
+def api_drone_settings_get():
+    return jsonify(_drone().load())
+
+
+@bp.post("/api/drone-settings")
+def api_drone_settings_set():
+    """Save the drone-detection WS feed config (enable + URL).
+
+    No page reload: the WS client is server-side, and the controller's reader
+    thread re-reads this from the DB and reconnects/idles on its own.
+    """
+    payload = request.get_json(silent=True) or {}
+    return jsonify(_drone().save(payload))
 
 
 @bp.post("/api/track")

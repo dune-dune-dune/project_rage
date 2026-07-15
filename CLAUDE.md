@@ -56,7 +56,7 @@ project_rage/
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # offline: best.pt→best.onnx, fetch ORT web, vendor Leaflet
 │   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws, db, network, models)
 │   │   ├── requirements-dev.txt  # pytest (dev-only; the cockpit runtime stays torch/pytest-free)
-│   │   ├── data/cockpit.db   # SQLite: crosshair, AI, map, video/network profiles, model registry (gitignored)
+│   │   ├── data/cockpit.db   # SQLite: crosshair, AI, map, video/network profiles, drone-detection feed, model registry (gitignored)
 │   │   ├── data/models/<id>/{source.pt|source.onnx,model.onnx,classes.json}  # the AI model library (gitignored)
 │   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # pre-library weights; imported once as the builtin model
 │   │   ├── settings.toml     # control tuning (rates, ramp_ms, axes, fire, speed_levels, [track] AI servo) — NOT secrets
@@ -139,8 +139,9 @@ a drone. The ⚙ button (top-left) opens a dropdown of settings panels: **мап
 **приціл** (H/V offset у % від центру, крок **0.01 %** — повзунок + числове поле для точного вводу;
 `/api/crosshair`, значення клампиться до ±50 і округлюється до 2 знаків у `store.py`), **ШІ модель**
 (бібліотека моделей — див. нижче — плюс confidence threshold default 70 %, min object size in px,
-Custom motion threshold %, `/api/ai-settings`), **мережа** (see below) and **алерти** (placeholder).
-All of them persist to SQLite (`services/web/data/cockpit.db`), not to JSON files.
+Custom motion threshold %, `/api/ai-settings`), **мережа** (see below), **дрон-детекція** (enable +
+WS URL of the target feed, `/api/drone-settings` — see «Drone-detection WebSocket» below) and **алерти**
+(placeholder). All of them persist to SQLite (`services/web/data/cockpit.db`), not to JSON files.
 
 **AI model library (⚙ → «Налаштування ШІ моделі»).** The operator uploads new YOLO weights and switches
 between models **at runtime** — no SFTP, no container restart. A `.pt` is registered instantly (202) and
@@ -370,6 +371,7 @@ model. In brief:
   `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
   `/api/ai-settings` (GET/POST conf + min size), `/api/map-settings` (GET/POST map origin lat/lon +
   north_correction), `/api/network-settings` (GET/POST video profiles + active mode),
+  `/api/drone-settings` (GET/POST drone-detection feed enable + WS URL),
   `/api/models` (GET list + POST multipart upload of `.pt`/`.onnx`),
   `/api/models/<id>/activate` (POST), `/api/models/<id>/rename` (POST), `/api/models/<id>` (DELETE),
   `/assets/models/<id>/model.onnx` + `/assets/models/<id>/classes.json`,
@@ -391,9 +393,13 @@ model. In brief:
   thread (`turret.py:_run_drone_loop`, `websocket-client` imported lazily) connects with a reconnect loop,
   keeps only the `targets` (via `parse_drone_targets`: id, lat/lon, kind `fpv`/`molnia`, name, video_freq,
   altitude) and caches them under the lock; `snapshot()` serves them as `/api/status.targets` while fresh
-  (`_TARGETS_STALE_SECONDS = 30 s`, else `[]`). Gated by `DRONE_WS_ENABLED` (env, default off) +
-  `DRONE_WS_URL` (default `ws://127.0.0.1:8766`), enabled in `docker-compose.jetson.yml`. Independent of the
-  20 Hz loop; the browser plots the targets on the map (see «Drone-detection target markers» above). This is
+  (`_TARGETS_STALE_SECONDS = 30 s`, else `[]`). Its config — **enable flag + WS URL** — is **DB-backed**
+  (`DroneStore`, `KEY_DRONE`, seeded disabled by `migrations/0004_seed_drone.sql`), NOT env: the reader
+  thread re-reads it live so the ⚙ panel «Налаштування дрон-детекції» (`GET/POST /api/drone-settings`)
+  **hot-applies** enable/URL changes with no page reload and no restart (recv has a timeout so a change is
+  picked up within ~`_DRONE_RECV_TIMEOUT`; disabling clears the markers). The thread starts whenever a
+  `DroneStore` is injected (`create_app`) and idles when disabled. Independent of the 20 Hz loop; the
+  browser plots the targets on the map (see «Drone-detection target markers» above). This is
   **display-only** — it never touches `arm`/`fire`.
 
 ## Known gaps (do not assume these work)

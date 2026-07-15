@@ -40,6 +40,9 @@ KEY_CROSSHAIR = "crosshair"
 KEY_AI = "ai"
 KEY_MAP = "map"
 KEY_NETWORK = "network"
+# Drone-detection WebSocket feed: {"enabled": bool, "url": "ws://host:port"}.
+# Server-side (the reader thread reads it), unlike the browser-side network key.
+KEY_DRONE = "drone"
 # Which AI model is active: {"active": "<model id>"}. The models themselves live
 # in their own `models` table (0003_models.sql), not in a JSON blob — they carry
 # per-row metadata (status, classes, size) rather than one settings section.

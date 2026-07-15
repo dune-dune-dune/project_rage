@@ -68,6 +68,11 @@ _LIDAR_OPEN_RETRY_SECONDS = 1.0
 # is reconnected on this cadence after an error/disconnect.
 _TARGETS_STALE_SECONDS = 30.0
 _DRONE_OPEN_RETRY_SECONDS = 2.0
+# recv() timeout: also how often the loop re-reads its DB config while connected,
+# so a URL change / disable from the ⚙ panel is picked up within this window.
+_DRONE_RECV_TIMEOUT = 5.0
+# How often the loop re-checks the DB config while the feed is disabled.
+_DRONE_IDLE_POLL_SECONDS = 2.0
 # FPV target type; the rest we render are the "Molnia" plane types (2, 3).
 _TARGET_TYPE_FPV = 1
 
@@ -159,8 +164,11 @@ def _approach(current: float, target: float, step: float) -> float:
 
 
 class TurretController:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, drone_store=None) -> None:
         self._s = settings
+        # DroneStore (SQLite) for the drone-detection WS config, read live by the
+        # reader thread. None (e.g. in unit tests) => the reader thread is not run.
+        self._drone_store = drone_store
         self._lock = threading.Lock()
         self._intent = _Intent()
         self._fire_mode = settings.fire_mode if settings.fire_mode in _FIRE_MODES else "short"
@@ -224,9 +232,9 @@ class TurretController:
         self._lidar_thread: threading.Thread | None = None
 
         # Drone-detection targets (list of dicts, see parse_drone_targets),
-        # populated by a dedicated WebSocket reader thread when
-        # settings.drone_ws_enabled. Guarded by self._lock; served via snapshot()
-        # only while fresh (see _TARGETS_STALE_SECONDS).
+        # populated by a dedicated WebSocket reader thread whose enable/URL come
+        # live from the DroneStore (SQLite). Guarded by self._lock; served via
+        # snapshot() only while fresh (see _TARGETS_STALE_SECONDS).
         self._targets: list[dict] = []
         self._targets_last_monotonic = 0.0
         self._drone_thread: threading.Thread | None = None
@@ -275,12 +283,12 @@ class TurretController:
                 self._s.rangefinder_port, self._s.rangefinder_baud,
             )
 
-        if self._s.drone_ws_enabled:
+        if self._drone_store is not None:
             self._drone_thread = threading.Thread(
                 target=self._run_drone_loop, name="drone-ws", daemon=True
             )
             self._drone_thread.start()
-            log.info("Drone-detection WS reader thread started (%s)", self._s.drone_ws_url)
+            log.info("Drone-detection WS reader thread started (config from DB)")
 
     def _try_open_channel(self, now: float) -> None:
         """Attempt to open the UDP channel; record a clear error on failure."""
@@ -389,55 +397,94 @@ class TurretController:
     def _run_drone_loop(self) -> None:
         """Consume the drone-detection WebSocket and cache the latest targets.
 
-        Runs in its own daemon thread with a reconnect loop, mirroring the LiDAR
-        reader: websocket-client is imported lazily so the app boots without it
-        when the feed is disabled, and _stop_event.wait() paces reconnects so
-        shutdown stays responsive. Each ``type == "status"`` frame replaces the
-        cached target list; malformed frames are ignored."""
+        Runs in its own daemon thread with a reconnect loop. The enable flag and
+        URL are read live from the DroneStore (SQLite) each iteration, so toggling
+        the feed or changing the URL from the ⚙ panel is hot-applied with no
+        restart: while connected, recv() has a timeout so the config is re-read
+        within _DRONE_RECV_TIMEOUT even if the feed is silent. websocket-client is
+        imported lazily so the app boots without it. Each ``type == "status"``
+        frame replaces the cached target list; malformed frames are ignored."""
         try:
-            import websocket  # websocket-client; only needed when the WS is enabled.
+            import websocket  # websocket-client; only needed when the feed is enabled.
         except ModuleNotFoundError:
             log.error(
-                "DRONE_WS_ENABLED but websocket-client is not installed; drone "
-                "targets disabled. Add websocket-client to requirements.txt."
+                "Drone-detection WS enabled but websocket-client is not installed; "
+                "drone targets disabled. Add websocket-client to requirements.txt."
             )
             return
 
-        url = self._s.drone_ws_url
+        ws = None
+        cur_url: str | None = None
         logged_error = False
-        while not self._stop_event.is_set():
+
+        def _disconnect() -> None:
+            nonlocal ws, cur_url
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:  # noqa: BLE001 - best-effort cleanup
+                    pass
             ws = None
-            try:
-                ws = websocket.create_connection(url, timeout=10)
-                logged_error = False
-                log.info("Drone-detection WS connected: %s", url)
-                while not self._stop_event.is_set():
-                    raw = ws.recv()
-                    if not raw:
-                        continue  # keepalive / empty frame
+            cur_url = None
+
+        try:
+            while not self._stop_event.is_set():
+                cfg = self._drone_store.load()
+                enabled, url = cfg.get("enabled"), cfg.get("url")
+
+                # Disabled: drop any connection + clear the markers, then re-poll.
+                if not enabled or not url:
+                    if ws is not None:
+                        _disconnect()
+                        with self._lock:
+                            self._targets = []
+                    self._stop_event.wait(_DRONE_IDLE_POLL_SECONDS)
+                    continue
+
+                # URL changed under us: reconnect to the new one.
+                if ws is not None and url != cur_url:
+                    _disconnect()
+
+                if ws is None:
                     try:
-                        message = json.loads(raw)
-                    except (ValueError, TypeError):
-                        continue  # ignore malformed frames
-                    if not isinstance(message, dict) or message.get("type") != "status":
+                        ws = websocket.create_connection(url, timeout=_DRONE_RECV_TIMEOUT)
+                        cur_url = url
+                        logged_error = False
+                        log.info("Drone-detection WS connected: %s", url)
+                    except Exception as exc:  # noqa: BLE001 - retry on any connect error
+                        if not logged_error:
+                            log.error("Drone-detection WS connect error (%s): %s", url, exc)
+                            logged_error = True
+                        self._stop_event.wait(_DRONE_OPEN_RETRY_SECONDS)
                         continue
-                    targets = parse_drone_targets(message)
-                    now = time.monotonic()
-                    with self._lock:
-                        self._targets = targets
-                        self._targets_last_monotonic = now
-            except Exception as exc:  # noqa: BLE001 - reconnect on any WS/socket error
-                if not logged_error:
-                    log.error("Drone-detection WS error (%s): %s", url, exc)
-                    logged_error = True
-            finally:
-                if ws is not None:
-                    try:
-                        ws.close()
-                    except Exception:  # noqa: BLE001 - best-effort cleanup
-                        pass
-            if not self._stop_event.is_set():
-                self._stop_event.wait(_DRONE_OPEN_RETRY_SECONDS)
+
+                try:
+                    raw = ws.recv()
+                except websocket.WebSocketTimeoutException:
+                    continue  # idle tick: loop re-reads the DB config
+                except Exception as exc:  # noqa: BLE001 - reconnect on any WS/socket error
+                    if not logged_error:
+                        log.error("Drone-detection WS read error (%s): %s", cur_url, exc)
+                        logged_error = True
+                    _disconnect()
+                    self._stop_event.wait(_DRONE_OPEN_RETRY_SECONDS)
+                    continue
+
+                if not raw:
+                    continue  # keepalive / empty frame
+                try:
+                    message = json.loads(raw)
+                except (ValueError, TypeError):
+                    continue  # ignore malformed frames
+                if not isinstance(message, dict) or message.get("type") != "status":
+                    continue
+                targets = parse_drone_targets(message)
+                now = time.monotonic()
+                with self._lock:
+                    self._targets = targets
+                    self._targets_last_monotonic = now
+        finally:
+            _disconnect()
 
     # --------------------------------------------------------------------- input
     def apply_input(self, payload: dict) -> None:

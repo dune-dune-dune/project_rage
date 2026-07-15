@@ -334,6 +334,14 @@ html, body {
   cursor: pointer;
 }
 .np-mode input[type="radio"] { margin: 0; cursor: pointer; }
+/* Drone panel enable checkbox: inline (label defaults to column). */
+.dp-toggle {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 6px !important;
+  cursor: pointer;
+}
+.dp-toggle input[type="checkbox"] { margin: 0; cursor: pointer; }
 .menu-panel button {
   padding: 8px;
   border-radius: 8px;

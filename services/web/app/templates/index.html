@@ -117,6 +117,7 @@
     <button class="menu-item" type="button" data-panel="crosshair">Налаштування прицілу</button>
     <button class="menu-item" type="button" data-panel="ai">Налаштування ШІ моделі</button>
     <button class="menu-item" type="button" data-panel="network">Налаштування мережі</button>
+    <button class="menu-item" type="button" data-panel="drone">Налаштування дрон-детекції</button>
     <button class="menu-item" type="button" data-panel="alerts">Налаштування алертів</button>
   </div>
 
@@ -271,6 +272,20 @@
     <button id="net-save" type="button">Зберегти</button>
   </div>
 
+  <!-- Drone-detection feed (external WebSocket → target markers on the map). -->
+  <div id="drone-panel" class="menu-panel" hidden>
+    <div class="sp-title">Дрон-детекція</div>
+    <label class="dp-toggle">
+      <input id="drone-enabled" type="checkbox" /> Показувати цілі на мапі
+    </label>
+    <label>Адреса WebSocket
+      <input id="drone-url" type="text" spellcheck="false" placeholder="ws://10.20.100.1:8766" />
+    </label>
+    <div class="sp-note">Сервер дрон-детекції за WireGuard (доступний лише з Jetson). Формат
+      <b>ws://хост:порт</b>. Застосовується одразу, без перезавантаження сторінки.</div>
+    <button id="drone-save" type="button">Зберегти</button>
+  </div>
+
   <!-- Alerts settings (placeholder — functionality added later). -->
   <div id="alerts-panel" class="menu-panel" hidden>
     <div class="sp-title">Налаштування алертів</div>
@@ -379,6 +394,7 @@
     window.__AI__ = {{ ai | tojson }};
     window.__MAP__ = {{ map_settings | tojson }};
     window.__NETWORK__ = {{ network | tojson }};
+    window.__DRONE__ = {{ drone | tojson }};
     window.__ASSET_VERSION__ = {{ asset_version | tojson }};
   </script>
   <!-- ONNX Runtime Web is imported inside ai-worker.js (off the main thread). -->

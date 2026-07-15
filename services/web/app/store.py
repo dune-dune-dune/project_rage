@@ -24,7 +24,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .db import KEY_AI, KEY_CROSSHAIR, KEY_MAP, KEY_MODELS, KEY_NETWORK, SettingsDb
+from .db import KEY_AI, KEY_CROSSHAIR, KEY_DRONE, KEY_MAP, KEY_MODELS, KEY_NETWORK, SettingsDb
 
 log = logging.getLogger("cockpit.store")
 
@@ -364,6 +364,51 @@ class NetworkStore:
                 path = entry.get("path")
                 if isinstance(path, str) and _PATH_RE.match(path.strip()):
                     data[name]["streams"][index] = {"label": _CAM_LABELS[index], "path": path.strip()}
+        return data
+
+
+# --- Drone-detection feed ------------------------------------------------------
+# The external server (far end of the WireGuard tunnel) streams target lat/lon
+# over a WebSocket; the reader thread in TurretController consumes it. Unlike the
+# network store (browser-side) this is read server-side, so it is edited from the
+# cockpit ⚙ panel and hot-applied by the reader thread — no page reload.
+_DRONE_URL_DEFAULT = "ws://10.20.100.1:8766"
+# A WebSocket URL: ws:// or wss://, a hostname/IP, optional :port and path. Kept
+# strict since it is opened by websocket-client server-side; an invalid value
+# keeps the previous one (like NetworkStore) rather than snapping to a default.
+_WS_URL_RE = re.compile(r"^wss?://[A-Za-z0-9.\-]{1,253}(:[0-9]{1,5})?(/[^\s]*)?$")
+
+
+class DroneStore:
+    """Drone-detection WS feed: {"enabled": bool, "url": "ws://host:port"}."""
+
+    def __init__(self, db: SettingsDb, key: str = KEY_DRONE) -> None:
+        self._db = db
+        self._key = key
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _normalize(raw: dict) -> dict:
+        url = raw.get("url")
+        return {
+            "enabled": bool(raw.get("enabled", False)),
+            "url": url.strip() if isinstance(url, str) and _WS_URL_RE.match(url.strip()) else _DRONE_URL_DEFAULT,
+        }
+
+    def load(self) -> dict:
+        with self._lock:
+            return self._normalize(self._db.get(self._key) or {})
+
+    def save(self, payload: object) -> dict:
+        patch = payload if isinstance(payload, dict) else {}
+        with self._lock:
+            current = self._normalize(self._db.get(self._key) or {})
+            # enabled always applies; an invalid url keeps the current value.
+            data = {"enabled": bool(patch.get("enabled", current["enabled"])), "url": current["url"]}
+            url = patch.get("url")
+            if isinstance(url, str) and _WS_URL_RE.match(url.strip()):
+                data["url"] = url.strip()
+            self._db.put(self._key, data)
         return data
 
 

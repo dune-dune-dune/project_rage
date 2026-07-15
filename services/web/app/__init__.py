@@ -20,6 +20,7 @@ from .routes import bp
 from .store import (
     AiSettingsStore,
     CrosshairStore,
+    DroneStore,
     MapSettingsStore,
     ModelStore,
     NetworkStore,
@@ -51,7 +52,10 @@ def create_app() -> Flask:
     db.migrate()
     import_legacy_json(db, settings)
 
-    controller = TurretController(settings)
+    # The drone-detection WS config is DB-backed and read live by the controller's
+    # reader thread, so it must exist before the controller starts.
+    drone = DroneStore(db)
+    controller = TurretController(settings, drone_store=drone)
     controller.start()
     atexit.register(controller.stop)
 
@@ -73,6 +77,7 @@ def create_app() -> Flask:
     app.config["AI_SETTINGS"] = AiSettingsStore(db)
     app.config["MAP_SETTINGS"] = MapSettingsStore(db)
     app.config["NETWORK"] = NetworkStore(db)
+    app.config["DRONE"] = drone
     app.config["MODELS"] = models
     app.config["MODEL_JOBS"] = ModelJobs(models, settings.exporter_url, settings.exporter_data_dir)
     app.register_blueprint(bp)

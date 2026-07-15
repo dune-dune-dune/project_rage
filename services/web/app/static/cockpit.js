@@ -517,6 +517,7 @@ applyCrosshair();
     crosshair: document.getElementById("crosshair-panel"),
     ai: document.getElementById("ai-panel"),
     network: document.getElementById("network-panel"),
+    drone: document.getElementById("drone-panel"),
     alerts: document.getElementById("alerts-panel"),
   };
   const panelEls = Object.values(panels).filter(Boolean);
@@ -668,6 +669,56 @@ applyCrosshair();
 
   panel.addEventListener("input", () => { if (note) note.innerHTML = noteText; });
   fill(window.__NETWORK__);
+})();
+
+// ------------------------------------------------------------ drone detection
+// Enable + point the drone-detection WebSocket feed. Server-side (SQLite): the
+// controller's reader thread re-reads this and reconnects/idles on its own, so
+// unlike the network panel there is NO page reload — targets just appear on the
+// map (via /api/status) once the feed connects. An invalid URL is rejected by
+// the server (previous value kept); we surface that instead of reloading.
+(function initDronePanel() {
+  const panel = document.getElementById("drone-panel");
+  const saveBtn = document.getElementById("drone-save");
+  const enabledEl = document.getElementById("drone-enabled");
+  const urlEl = document.getElementById("drone-url");
+  if (!panel || !saveBtn || !enabledEl || !urlEl) return;
+  const note = panel.querySelector(".sp-note");
+  const noteText = note ? note.innerHTML : "";
+
+  function fill(cfg) {
+    if (!cfg || typeof cfg !== "object") return;
+    enabledEl.checked = !!cfg.enabled;
+    urlEl.value = cfg.url || "";
+  }
+
+  saveBtn.addEventListener("click", async () => {
+    const payload = { enabled: enabledEl.checked, url: urlEl.value.trim() };
+    saveBtn.disabled = true;
+    try {
+      const res = await fetch("/api/drone-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const saved = await res.json();
+      fill(saved);
+      // The server keeps the previous URL if the typed one was malformed.
+      if (note) {
+        note.innerHTML = saved.url !== payload.url
+          ? "Невірна адреса — значення відхилено."
+          : "Збережено.";
+      }
+    } catch (err) {
+      if (note) note.innerHTML = "Не вдалося зберегти: " + err.message;
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  panel.addEventListener("input", () => { if (note) note.innerHTML = noteText; });
+  fill(window.__DRONE__);
 })();
 
 // -------------------------------------------------------------- WHEP video
