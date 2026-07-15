@@ -3,8 +3,10 @@
 # Everything runs in Docker on the Jetson (Linux host networking works there).
 # This override adds the things that only exist in production:
 #   1. the Benewake TF03-180 serial rangefinder on /dev/ttyUSB0;
-#   2. the wg-targets WireGuard tunnel to the targets VM (10.31.0.100), used by
-#      the browser's live targets WebSocket feed (ws://10.31.0.100:8766).
+#   2. the wg-targets WireGuard tunnel to the targets VM (10.31.0.100). The
+#      cockpit (this Jetson) connects to ws://10.31.0.100:8766 over that tunnel
+#      and relays the targets feed to the browser via /api/targets — the browser
+#      has no route to the VM. Enabled here with TARGETS_ENABLED=true.
 # Neither is in the base compose so a local `docker compose up` never fails on a
 # missing device or a missing tunnel config.
 #
@@ -25,8 +27,9 @@ services:
       RANGEFINDER_ENABLED: "true"
       RANGEFINDER_PORT: "/dev/ttyUSB0"
       RANGEFINDER_BAUD: "115200"
-      # Where the browser opens the live targets WebSocket (separate VM over the
-      # wg-targets tunnel). Override in .env if the address differs.
+      # The cockpit connects to the targets VM here (over the wg-targets tunnel)
+      # and relays the feed to the browser. Override in .env if the address differs.
+      TARGETS_ENABLED: "true"
       TARGETS_WS_HOST: "${TARGETS_WS_HOST:-10.31.0.100}"
       TARGETS_WS_PORT: "${TARGETS_WS_PORT:-8766}"
 

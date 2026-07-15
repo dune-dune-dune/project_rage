@@ -1,8 +1,12 @@
-// Renders live targets (FPV drones / "Молнія" missiles) from the TargetsWS feed
-// as pulsing markers on the existing Leaflet map. Icon SVGs and the
-// target_type_id selection rule are copied verbatim from the reference project.
+// Renders live targets (FPV drones / "Молнія" missiles) as pulsing markers on
+// the existing Leaflet map. The browser has NO route to the targets VM — the
+// Jetson holds that WireGuard tunnel and relays the feed, so this polls
+// /api/targets on the cockpit's own origin (see app/targets.py). Icon SVGs and
+// the target_type_id selection rule are copied verbatim from the reference.
 (function () {
     'use strict';
+
+    const POLL_INTERVAL_MS = 1000;  // the upstream feed updates ~once per second
 
     function getTargetIconSVG(targetTypeId, targetName) {
         // Молнія (ракета з крилами)
@@ -64,12 +68,26 @@
         });
     }
 
-    // Expose for manual/console testing without the WS server running.
+    // Expose for manual/console testing without the relay running.
     window.updateTargetMarkers = updateTargetMarkers;
 
-    if (window.TargetsWS) {
-        window.TargetsWS.on('status', (data) => {
-            if (data && data.targets) updateTargetMarkers(data.targets);
-        });
+    // Poll the cockpit's own origin; the Jetson relay does the WG-tunnelled work.
+    let inFlight = false;
+    async function pollTargets() {
+        if (inFlight) return;
+        inFlight = true;
+        try {
+            const res = await fetch('/api/targets', { cache: 'no-store' });
+            if (res.ok) {
+                const data = await res.json();
+                updateTargetMarkers((data && data.targets) || {});
+            }
+        } catch (e) {
+            // Transient network/relay hiccup — keep the last markers, retry next tick.
+        } finally {
+            inFlight = false;
+        }
     }
+    setInterval(pollTargets, POLL_INTERVAL_MS);
+    pollTargets();
 })();

@@ -62,11 +62,13 @@ class Settings:
     salt: bytes
 
     # --- Targets feed (separate VM, reached over its own WireGuard tunnel) ---
-    # The browser opens a WebSocket to this host:port for the live targets stream
-    # (see static/ws-client.js). It is NOT the cockpit host: the targets server
-    # lives on another VM (default 10.31.0.100), reachable only through the
-    # wg-targets tunnel brought up by the compose sidecar. Empty host => the client
-    # falls back to window.location.hostname (same host as the page).
+    # THIS process (the cockpit, on the Jetson) is the WebSocket client to the
+    # targets VM at targets_ws_host:targets_ws_port (default 10.31.0.100:8766),
+    # reachable only over the wg-targets tunnel — the browser has no route there.
+    # The relay (app.targets) caches frames; the browser polls /api/targets on the
+    # cockpit's own origin. Gated by targets_enabled (Jetson only, like the
+    # rangefinder) so local runs / tests never open the connection.
+    targets_enabled: bool
     targets_ws_host: str
     targets_ws_port: int
 
@@ -253,6 +255,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         dst_port=_env_int("RWS_DST_PORT", 7780),
         dry_run=_env_bool("RWS_DRY_RUN", True),
         salt=_load_salt(),
+        targets_enabled=_env_bool("TARGETS_ENABLED", False),
         targets_ws_host=os.environ.get("TARGETS_WS_HOST", "10.31.0.100").strip(),
         targets_ws_port=_env_int("TARGETS_WS_PORT", 8766),
         rangefinder_enabled=_env_bool("RANGEFINDER_ENABLED", False),

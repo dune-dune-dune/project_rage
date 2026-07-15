@@ -42,6 +42,10 @@ def _network():
     return current_app.config["NETWORK"]
 
 
+def _targets_relay():
+    return current_app.config["TARGETS_RELAY"]
+
+
 def _models():
     return current_app.config["MODELS"]
 
@@ -62,7 +66,7 @@ def _asset_version() -> int:
     for name in (
         "ai.js", "ai-worker.js", "cockpit.js", "cockpit.css",
         "map.js", "compass.js", "heartbeat-worker.js", "models.js",
-        "ws-client.js", "targets.js",
+        "targets.js",
     ):
         try:
             latest = max(latest, int(os.path.getmtime(os.path.join(static, name))))
@@ -130,8 +134,6 @@ def index():
         fire_mode=_controller().snapshot()["fire_mode"],
         speed=_controller().speed_config(),
         ai=_ai_config(settings),
-        targets_ws_host=settings.targets_ws_host,
-        targets_ws_port=settings.targets_ws_port,
         asset_version=_asset_version(),
     )
 
@@ -139,6 +141,17 @@ def index():
 @bp.get("/healthz")
 def healthz():
     return jsonify(status="ok")
+
+
+@bp.get("/api/targets")
+def api_targets():
+    """Latest targets relayed from the separate VM (see app.targets).
+
+    The browser polls this on the cockpit's own origin; the Jetson holds the WG
+    tunnel to the targets server, not the browser. Returns {} when disabled or
+    the upstream feed is stale.
+    """
+    return jsonify(targets=_targets_relay().snapshot())
 
 
 @bp.post("/api/input")

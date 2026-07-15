@@ -49,9 +49,9 @@ project_rage/
 │   ├── exporter/             # Sidecar: uploaded YOLO .pt → ONNX (the ONLY place torch lives)
 │   │   └── Dockerfile + requirements.txt + src/main.py + README.md   # POST /convert, :8901 (loopback)
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
-│   │   ├── app/{__init__,config,turret,routes,ws,db,store,model_jobs,wsgi}.py  # factory, settings, control, routes, /api/ws, SQLite, stores, model conversion jobs
+│   │   ├── app/{__init__,config,turret,routes,ws,db,store,model_jobs,targets,wsgi}.py  # factory, settings, control, routes, /api/ws, SQLite, stores, model conversion jobs, targets-feed relay
 │   │   ├── app/migrations/*.sql  # schema + seed + models table, applied once at startup (see its README)
-│   │   ├── app/templates/index.html + app/static/{cockpit.js,ai.js,ai-worker.js,models.js,heartbeat-worker.js,map.js,compass.js,ws-client.js,targets.js,cockpit.css}  # landing grid + video + HUD + YOLO (worker) + AI model library + bg-tab heartbeat worker + map/gauges + compass + targets WS client + target markers
+│   │   ├── app/templates/index.html + app/static/{cockpit.js,ai.js,ai-worker.js,models.js,heartbeat-worker.js,map.js,compass.js,targets.js,cockpit.css}  # landing grid + video + HUD + YOLO (worker) + AI model library + bg-tab heartbeat worker + map/gauges + compass + target markers (polls /api/targets)
 │   │   ├── app/static/vendor/  # onnxruntime-web (fetch_ort.sh) + leaflet/ (fetch_leaflet.sh)
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # offline: best.pt→best.onnx, fetch ORT web, vendor Leaflet
 │   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws, db, network, models)
@@ -217,16 +217,19 @@ map to a settings form (only lat, lon, `north_correction`; Save → `POST /api/m
 `bearing = angle_rot_deg + north_correction`. `map.js` exposes the Leaflet instance via a
 `window.mapWidgets.map` getter so `targets.js` can drop markers on it.
 
-**Live target markers (`ws-client.js` + `targets.js`):** a standalone WebSocket client
-(`window.TargetsWS`) opens `ws://<TARGETS_WS_HOST>:<TARGETS_WS_PORT>` (defaults `10.31.0.100:8766`,
-injected as `window.__TARGETS_WS_HOST__/__PORT__`; empty host → the page host) with auto-reconnect
-(exp. backoff), a staleness heartbeat, and reconnect on tab-visible/`online`. The targets server is a
-**separate VM** reached over its **own** WireGuard tunnel (`wg-targets`, distinct from the turret VPN on
-the MikroTik) — the `wg-targets` compose sidecar (`docker-compose.jetson.yml`, `network_mode: host` +
-`NET_ADMIN`) brings it up from `data/wg-targets.conf` (git-ignored; copy `wg-targets.conf.example`). It
-subscribes with `{type:'subscribe', mode:'targets_only'}`; each `{type:'status', targets:{…}}` frame is
-drawn by `targets.js:updateTargetMarkers()` as pulsing `L.divIcon` markers on the shared Leaflet map
-(FPV vs «Молнія» SVG chosen by `target_type_id`; styles in `cockpit.css`, `.target-marker*`). This is
+**Live target markers (`app/targets.py` relay + `targets.js`).** The targets server lives on a
+**separate VM** (default `10.31.0.100:8766`), reachable **only from the Jetson** over its **own**
+WireGuard tunnel (`wg-targets`, distinct from the turret VPN on the MikroTik) — **the browser has no
+route there**. So the cockpit (Jetson) is the WebSocket *client*: `TargetsRelay` (a daemon thread, like
+the LiDAR reader) connects with `simple_websocket.Client` (already a flask-sock dep — no new package),
+subscribes `{type:'subscribe', mode:'targets_only'}`, and caches each `{type:'status', targets:{…}}`
+frame (dropped after `_STALE_SECONDS=5`). The browser then **polls `GET /api/targets`** on the cockpit's
+own origin every 1 s (`targets.js`) and draws the targets as pulsing `L.divIcon` markers on the shared
+Leaflet map (`window.mapWidgets.map` getter; FPV vs «Молнія» SVG chosen by `target_type_id`; styles in
+`cockpit.css`, `.target-marker*`). The relay is gated by `TARGETS_ENABLED` (env, default off — Jetson
+only, like the rangefinder; `docker-compose.jetson.yml` sets it true) with `TARGETS_WS_HOST`/`_PORT`. The
+`wg-targets` compose sidecar (`docker-compose.jetson.yml`, `network_mode: host` + `NET_ADMIN`) brings the
+tunnel up from `data/wg-targets.conf` (git-ignored; copy `wg-targets.conf.example`). This is
 **display-only** — it never touches control/fire and is independent of the RWS command stream.
 
 **Compass (top-centre):** `compass.js` renders `#compass` — a horizontal scrolling
@@ -369,6 +372,7 @@ model. In brief:
   `readyState===OPEN` while dropping frames, black-holing the heartbeat and tripping the deadman. HTTP
   routes: `/`, `/healthz`, `/api/input`, `/api/status`,
   `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
+  `/api/targets` (GET latest relayed targets feed),
   `/api/ai-settings` (GET/POST conf + min size), `/api/map-settings` (GET/POST map origin lat/lon +
   north_correction), `/api/network-settings` (GET/POST video profiles + active mode),
   `/api/models` (GET list + POST multipart upload of `.pt`/`.onnx`),
