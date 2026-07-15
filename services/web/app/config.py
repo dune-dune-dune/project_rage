@@ -72,6 +72,13 @@ class Settings:
     # paces the edge-triggered `rangefinder_seq` sent over the RWS command stream.
     rangefinder_measure_interval_ms: int
 
+    # --- Drone-detection WebSocket (external server streaming target lat/lon) ---
+    # Only enabled on the Jetson (production) / over the VPN, where the detection
+    # server is reachable through the WireGuard tunnel. When disabled, no client
+    # thread is started and /api/status serves an empty targets list.
+    drone_ws_enabled: bool
+    drone_ws_url: str
+
     # --- Control tuning (settings.toml) ---
     send_rate_hz: int
     deadman_ms: int
@@ -260,6 +267,8 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         rangefinder_port=os.environ.get("RANGEFINDER_PORT", "/dev/ttyUSB0"),
         rangefinder_baud=_env_int("RANGEFINDER_BAUD", 115200),
         rangefinder_measure_interval_ms=int(control.get("rangefinder_measure_interval_ms", 250)),
+        drone_ws_enabled=_env_bool("DRONE_WS_ENABLED", False),
+        drone_ws_url=os.environ.get("DRONE_WS_URL", "ws://127.0.0.1:8766"),
         send_rate_hz=int(control.get("send_rate_hz", 20)),
         deadman_ms=int(control.get("deadman_ms", 400)),
         failsafe_ms=int(control.get("failsafe_ms", 30000)),

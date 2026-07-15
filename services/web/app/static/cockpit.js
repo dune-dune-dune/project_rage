@@ -315,6 +315,9 @@ async function pollStatus() {
     lastElDeg = typeof el === "number" ? el : null;
     // Push live angles to the map widgets (no-op until map.js registers).
     if (window.mapWidgets) window.mapWidgets.update();
+    // Push drone-detection targets to the map (empty list clears the markers).
+    if (window.mapWidgets && window.mapWidgets.setTargets)
+      window.mapWidgets.setTargets(s.targets || []);
 
     // Turret health telemetry (battery / motor temps & currents / rangefinder).
     const num = (v, suffix, digits) =>

@@ -215,6 +215,15 @@ map to a settings form (only lat, lon, `north_correction`; Save → `POST /api/m
 `pollStatus`, which calls `window.mapWidgets.update()` at 5 Hz). Bearing mapping:
 `bearing = angle_rot_deg + north_correction`.
 
+**Drone-detection target markers.** The same map (both the landing map and the control mini-map — it is
+one shared instance) also plots **air targets** streamed from an external drone-detection WebSocket
+(see the server-side reader in «Architecture» below). `pollStatus` pushes `/api/status.targets` into
+`window.mapWidgets.setTargets(list)` (`map.js`), which reconciles an `L.layerGroup` of `L.divIcon`
+markers keyed by target id (no flicker): **FPV** (`target_type_id == 1`) draws a drone SVG, **«Молнія»**
+(types 2/3) draws a plane SVG, each with a `altitude / video_freq` label (`.target-marker*` CSS strips the
+divIcon box). Markers clear when the feed goes stale (server drops targets after `_TARGETS_STALE_SECONDS`
+= 30 s). Aim/fire are untouched — this is display only.
+
 **Compass (top-centre):** `compass.js` renders `#compass` — a horizontal scrolling
 degree tape (`#compass-tape`, SVG) with a boxed current-bearing readout above it
 (`#compass-val`). It shows the SAME compass bearing as the azimuth gauge/map needle
@@ -306,7 +315,7 @@ rate; the `TurretController` overrides its velocity axes with that proportional 
 no FOV calibration needed, no absolute angle). The aim point is the crosshair position **including its
 programmatic offset**, computed by inverting the `object-fit: cover` + zoom mapping. The weights come from
 the **model library** (⚙ panel, see above) — upload a `.pt` and the `exporter` container converts it; the
-**cockpit runtime itself stays torch-free** (`requirements.txt` = flask/gunicorn/pyserial), which is why
+**cockpit runtime itself stays torch-free** (`requirements.txt` = flask/gunicorn/pyserial/websocket-client), which is why
 the conversion is a sidecar and not an in-process call. Vendor ORT once: `bash scripts/fetch_ort.sh`; and
 Leaflet for the map widget: `bash scripts/fetch_leaflet.sh` (map *tiles* still need internet in the
 browser).
@@ -377,6 +386,15 @@ model. In brief:
   `RANGEFINDER_BAUD` (default 115200); when disabled (local), `distance_m` falls back to the turret status
   reply. The device is passed into the container by `docker-compose.jetson.yml` — a separate serial reader,
   independent of the 20 Hz command loop, so a blocking read never stalls control.
+- **Drone-detection WebSocket:** an external server (far end of the WireGuard tunnel, reachable only from
+  the Jetson) streams full JSON status snapshots on port **8766**. A dedicated `TurretController` reader
+  thread (`turret.py:_run_drone_loop`, `websocket-client` imported lazily) connects with a reconnect loop,
+  keeps only the `targets` (via `parse_drone_targets`: id, lat/lon, kind `fpv`/`molnia`, name, video_freq,
+  altitude) and caches them under the lock; `snapshot()` serves them as `/api/status.targets` while fresh
+  (`_TARGETS_STALE_SECONDS = 30 s`, else `[]`). Gated by `DRONE_WS_ENABLED` (env, default off) +
+  `DRONE_WS_URL` (default `ws://127.0.0.1:8766`), enabled in `docker-compose.jetson.yml`. Independent of the
+  20 Hz loop; the browser plots the targets on the map (see «Drone-detection target markers» above). This is
+  **display-only** — it never touches `arm`/`fire`.
 
 ## Known gaps (do not assume these work)
 

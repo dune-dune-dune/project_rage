@@ -22,3 +22,7 @@ services:
       RANGEFINDER_ENABLED: "true"
       RANGEFINDER_PORT: "/dev/ttyUSB0"
       RANGEFINDER_BAUD: "115200"
+      # Drone-detection WebSocket over the WireGuard tunnel. Adjust the host to the
+      # detection server's address on the VPN if it differs.
+      DRONE_WS_ENABLED: "true"
+      DRONE_WS_URL: "ws://10.20.100.1:8766"

@@ -91,6 +91,89 @@
   <circle cx="20" cy="21" r="2.6" fill="#38ff9e"/>
 </svg>`;
 
+  // --- drone-detection targets ------------------------------------------------
+  // Air targets streamed from the server (/api/status.targets). FPV = drone icon,
+  // "Molnia" (types 2/3) = plane icon; the label shows "altitude / video_freq".
+  const FPV_ICON = `
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <circle cx="16" cy="16" r="4" fill="#ff4444" stroke="#ffffff" stroke-width="2"></circle>
+  <line x1="8" y1="8" x2="12" y2="12" stroke="#ffffff" stroke-width="2"></line>
+  <line x1="24" y1="8" x2="20" y2="12" stroke="#ffffff" stroke-width="2"></line>
+  <line x1="8" y1="24" x2="12" y2="20" stroke="#ffffff" stroke-width="2"></line>
+  <line x1="24" y1="24" x2="20" y2="20" stroke="#ffffff" stroke-width="2"></line>
+  <circle cx="8" cy="8" r="3" fill="#ffffff" stroke="#ff4444" stroke-width="1"></circle>
+  <circle cx="24" cy="8" r="3" fill="#ffffff" stroke="#ff4444" stroke-width="1"></circle>
+  <circle cx="8" cy="24" r="3" fill="#ffffff" stroke="#ff4444" stroke-width="1"></circle>
+  <circle cx="24" cy="24" r="3" fill="#ffffff" stroke="#ff4444" stroke-width="1"></circle>
+</svg>`;
+  const MOLNIA_ICON = `
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <rect x="14.5" y="6" width="3" height="18" rx="1.5" fill="#ff4444" stroke="#ffffff" stroke-width="1"></rect>
+  <path d="M 4 16 L 15 12 L 17 12 L 28 16 L 28 20 L 17 16 L 15 16 L 4 20 Z" fill="#ffffff" stroke="#ff4444" stroke-width="1"></path>
+  <path d="M 15 26 L 16 23 L 17 26 Z" fill="#ffffff" stroke="#ff4444" stroke-width="1"></path>
+  <rect x="10" y="24" width="12" height="2" fill="#ffffff" stroke="#ff4444" stroke-width="1"></rect>
+</svg>`;
+
+  let targetLayer = null; // L.layerGroup holding all target markers
+  const targetMarkers = new Map(); // target id -> { marker, html }
+
+  // Build the divIcon HTML for one target (icon by kind + freq/altitude label).
+  function targetHtml(t) {
+    const icon = t.kind === "fpv" ? FPV_ICON : MOLNIA_ICON;
+    const wrap = t.kind === "fpv" ? "drone-icon" : "plane-icon";
+    const alt = t.altitude ? t.altitude : "-";
+    const freq = t.video_freq != null ? t.video_freq : "-";
+    return (
+      `<div class="target-marker-container">` +
+      `<div class="${wrap}">${icon}</div>` +
+      `<div class="target-frequency-label">${alt} / ${freq}</div>` +
+      `</div>`
+    );
+  }
+
+  function makeTargetIcon(html) {
+    return L.divIcon({
+      html,
+      className: "target-marker",
+      iconSize: [32, 48],
+      iconAnchor: [16, 16], // anchor on the icon body centre, label hangs below
+    });
+  }
+
+  // Reconcile the live target list onto the map (keyed by id, no flicker): move
+  // existing markers, add new ones, drop the gone. Called at 5 Hz from cockpit.js.
+  function setTargets(list) {
+    if (!map || !targetLayer) return;
+    const seen = new Set();
+    for (const t of Array.isArray(list) ? list : []) {
+      if (t == null || typeof t.lat !== "number" || typeof t.lon !== "number") continue;
+      const id = String(t.id);
+      seen.add(id);
+      const html = targetHtml(t);
+      const existing = targetMarkers.get(id);
+      if (existing) {
+        existing.marker.setLatLng([t.lat, t.lon]);
+        if (existing.html !== html) {
+          existing.marker.setIcon(makeTargetIcon(html));
+          existing.html = html;
+        }
+      } else {
+        const marker = L.marker([t.lat, t.lon], {
+          icon: makeTargetIcon(html),
+          interactive: false,
+        }).addTo(targetLayer);
+        targetMarkers.set(id, { marker, html });
+      }
+    }
+    // Remove markers whose target vanished from the feed.
+    for (const [id, entry] of targetMarkers) {
+      if (!seen.has(id)) {
+        targetLayer.removeLayer(entry.marker);
+        targetMarkers.delete(id);
+      }
+    }
+  }
+
   function initMap() {
     if (typeof L === "undefined" || !canvas) return; // Leaflet not vendored
     map = L.map(canvas, {
@@ -121,6 +204,8 @@
       fillColor: "#38ff9e", fillOpacity: 0.12,
     }).addTo(map);
     needle = L.polyline([], { color: "#38ff9e", weight: 3, opacity: 0.9 }).addTo(map);
+    // Target markers live in their own layer group above the sector/needle.
+    targetLayer = L.layerGroup().addTo(map);
     redrawMap();
     // The container may not have its final size yet at construction time.
     setTimeout(() => map && map.invalidateSize(), 200);
@@ -308,6 +393,7 @@
 
   // Exposed for cockpit.js: update() drives live gauges/needle at 5 Hz;
   // fillForm() lets the top-left menu refresh the map inputs before showing;
-  // relayout() re-measures the map after the grid<->control view toggle.
-  window.mapWidgets = { update, fillForm, relayout };
+  // relayout() re-measures the map after the grid<->control view toggle;
+  // setTargets() reconciles the drone-detection markers (also at 5 Hz).
+  window.mapWidgets = { update, fillForm, relayout, setTargets };
 })();

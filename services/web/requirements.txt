@@ -3,3 +3,4 @@ flask-sock>=0.7          # WebSocket control-input channel (works with gthread w
 gunicorn>=21.2
 python-dotenv>=1.0
 pyserial>=3.5            # Benewake TF03-180 serial rangefinder (Jetson only; imported lazily)
+websocket-client>=1.7    # outbound client to the drone-detection WS (Jetson/VPN only; imported lazily)

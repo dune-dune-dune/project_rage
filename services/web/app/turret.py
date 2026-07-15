@@ -13,6 +13,7 @@ module never re-implements packet building or checksums.
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import sys
@@ -62,6 +63,14 @@ _OPEN_RETRY_SECONDS = 1.0
 _LIDAR_STALE_SECONDS = 1.0
 _LIDAR_OPEN_RETRY_SECONDS = 1.0
 
+# Drone-detection WebSocket: the last targets snapshot older than this is dropped
+# (so the map does not show phantom drones when the feed goes silent), and the WS
+# is reconnected on this cadence after an error/disconnect.
+_TARGETS_STALE_SECONDS = 30.0
+_DRONE_OPEN_RETRY_SECONDS = 2.0
+# FPV target type; the rest we render are the "Molnia" plane types (2, 3).
+_TARGET_TYPE_FPV = 1
+
 
 def parse_tf03_frame(frame: bytes) -> int | None:
     """Parse one 9-byte Benewake TF03 UART frame, returning distance in mm.
@@ -78,6 +87,40 @@ def parse_tf03_frame(frame: bytes) -> int | None:
     if distance_cm == 0:
         return None
     return distance_cm * 10
+
+
+def parse_drone_targets(message: dict) -> list[dict]:
+    """Extract renderable air targets from a drone-detection status message.
+
+    The upstream server streams a full snapshot ``{"type": "status", "targets":
+    {"<id>": {...}}, ...}``; we keep only the ``targets`` map and reduce each entry
+    to what the map needs. ``actual_lat``/``actual_lon`` arrive as strings — entries
+    without a valid float lat/lon are skipped. ``target_type_id == 1`` is an FPV
+    drone; types 2/3 are the "Molnia" plane. Returns a list ordered by id."""
+    targets = message.get("targets")
+    if not isinstance(targets, dict):
+        return []
+    out: list[dict] = []
+    for raw in targets.values():
+        if not isinstance(raw, dict):
+            continue
+        try:
+            lat = float(raw["actual_lat"])
+            lon = float(raw["actual_lon"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        type_id = raw.get("target_type_id")
+        out.append({
+            "id": raw.get("id"),
+            "lat": lat,
+            "lon": lon,
+            "kind": "fpv" if type_id == _TARGET_TYPE_FPV else "molnia",
+            "name": raw.get("target_name"),
+            "video_freq": raw.get("video_freq"),
+            "altitude": raw.get("altitude"),
+        })
+    out.sort(key=lambda t: (t["id"] is None, t["id"]))
+    return out
 
 
 @dataclass
@@ -180,6 +223,14 @@ class TurretController:
         self._lidar_last_monotonic = 0.0
         self._lidar_thread: threading.Thread | None = None
 
+        # Drone-detection targets (list of dicts, see parse_drone_targets),
+        # populated by a dedicated WebSocket reader thread when
+        # settings.drone_ws_enabled. Guarded by self._lock; served via snapshot()
+        # only while fresh (see _TARGETS_STALE_SECONDS).
+        self._targets: list[dict] = []
+        self._targets_last_monotonic = 0.0
+        self._drone_thread: threading.Thread | None = None
+
         # State owned exclusively by the sender thread — no lock needed for these.
         self._next_sequence = 0
         self._fire_seq = 0
@@ -224,6 +275,13 @@ class TurretController:
                 self._s.rangefinder_port, self._s.rangefinder_baud,
             )
 
+        if self._s.drone_ws_enabled:
+            self._drone_thread = threading.Thread(
+                target=self._run_drone_loop, name="drone-ws", daemon=True
+            )
+            self._drone_thread.start()
+            log.info("Drone-detection WS reader thread started (%s)", self._s.drone_ws_url)
+
     def _try_open_channel(self, now: float) -> None:
         """Attempt to open the UDP channel; record a clear error on failure."""
         self._next_open_attempt = now + _OPEN_RETRY_SECONDS
@@ -256,6 +314,8 @@ class TurretController:
             self._thread.join(timeout=2.0)
         if self._lidar_thread is not None:
             self._lidar_thread.join(timeout=2.0)
+        if self._drone_thread is not None:
+            self._drone_thread.join(timeout=2.0)
         if self._channel is not None:
             self._channel.close()
             self._channel = None
@@ -324,6 +384,60 @@ class TurretController:
                 ser.close()
             except Exception:  # noqa: BLE001 - best-effort cleanup
                 pass
+
+    # ------------------------------------------------------------ drone detection
+    def _run_drone_loop(self) -> None:
+        """Consume the drone-detection WebSocket and cache the latest targets.
+
+        Runs in its own daemon thread with a reconnect loop, mirroring the LiDAR
+        reader: websocket-client is imported lazily so the app boots without it
+        when the feed is disabled, and _stop_event.wait() paces reconnects so
+        shutdown stays responsive. Each ``type == "status"`` frame replaces the
+        cached target list; malformed frames are ignored."""
+        try:
+            import websocket  # websocket-client; only needed when the WS is enabled.
+        except ModuleNotFoundError:
+            log.error(
+                "DRONE_WS_ENABLED but websocket-client is not installed; drone "
+                "targets disabled. Add websocket-client to requirements.txt."
+            )
+            return
+
+        url = self._s.drone_ws_url
+        logged_error = False
+        while not self._stop_event.is_set():
+            ws = None
+            try:
+                ws = websocket.create_connection(url, timeout=10)
+                logged_error = False
+                log.info("Drone-detection WS connected: %s", url)
+                while not self._stop_event.is_set():
+                    raw = ws.recv()
+                    if not raw:
+                        continue  # keepalive / empty frame
+                    try:
+                        message = json.loads(raw)
+                    except (ValueError, TypeError):
+                        continue  # ignore malformed frames
+                    if not isinstance(message, dict) or message.get("type") != "status":
+                        continue
+                    targets = parse_drone_targets(message)
+                    now = time.monotonic()
+                    with self._lock:
+                        self._targets = targets
+                        self._targets_last_monotonic = now
+            except Exception as exc:  # noqa: BLE001 - reconnect on any WS/socket error
+                if not logged_error:
+                    log.error("Drone-detection WS error (%s): %s", url, exc)
+                    logged_error = True
+            finally:
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:  # noqa: BLE001 - best-effort cleanup
+                        pass
+            if not self._stop_event.is_set():
+                self._stop_event.wait(_DRONE_OPEN_RETRY_SECONDS)
 
     # --------------------------------------------------------------------- input
     def apply_input(self, payload: dict) -> None:
@@ -705,6 +819,8 @@ class TurretController:
             track_active = self._aim_active and now - self._last_aim_monotonic <= self._s.aim_timeout_seconds
             lidar_mm = self._lidar_distance_mm
             lidar_age = now - self._lidar_last_monotonic
+            targets = self._targets
+            targets_age = now - self._targets_last_monotonic
 
         # Rangefinder source: the serial TF03 (Jetson) when enabled — only while
         # its reading is fresh, else None so the HUD shows "—"; otherwise fall
@@ -755,6 +871,9 @@ class TurretController:
             "motor_rpm": {"x": self._rpm_x, "y": self._rpm_y},
             "voltage_fire": self._volt_fire,
             "voltage_cpu": self._volt_cpu,
+            # Drone-detection air targets (empty once the feed goes stale), each
+            # {id, lat, lon, kind: "fpv"|"molnia", name, video_freq, altitude}.
+            "targets": targets if targets_age <= _TARGETS_STALE_SECONDS else [],
         }
 
     @staticmethod
