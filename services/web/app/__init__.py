@@ -40,17 +40,9 @@ def create_app() -> Flask:
     app = Flask(__name__)
     settings = load_settings()
 
-    # Session secret for the PIN login. A stable SECRET_KEY (from .env) keeps
-    # sessions valid across restarts; without it we fall back to an ephemeral key
-    # so login still works this run but every session drops on restart.
-    if settings.secret_key:
-        app.secret_key = settings.secret_key
-    else:
-        app.secret_key = os.urandom(32)
-        if settings.pin:
-            log.warning("SECRET_KEY not set: login sessions will reset on restart")
-    if not settings.pin:
-        log.warning("COCKPIT_PIN not set: the cockpit is served WITHOUT authentication")
+    # The cockpit is served openly — there is no login gate. An ephemeral secret
+    # key is still set so Flask's session machinery is usable if ever needed.
+    app.secret_key = os.urandom(32)
 
     # Settings storage: apply the SQL migrations, then import any pre-SQLite JSON
     # files. Both must run before the stores, which read a table that does not
@@ -84,5 +76,5 @@ def create_app() -> Flask:
     app.config["MODELS"] = models
     app.config["MODEL_JOBS"] = ModelJobs(models, settings.exporter_url, settings.exporter_data_dir)
     app.register_blueprint(bp)
-    sock.init_app(app)  # /api/ws control channel (auth via the same before_request gate)
+    sock.init_app(app)  # /api/ws control channel
     return app

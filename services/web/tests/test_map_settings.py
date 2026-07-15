@@ -68,10 +68,7 @@ def test_corrupt_row_falls_back_to_defaults(tmp_path):
 def _authed_client_with_data_dir(app_factory, tmp_path, monkeypatch):
     monkeypatch.setenv("COCKPIT_DATA_DIR", str(tmp_path))
     app = app_factory()
-    c = app.test_client()
-    with c.session_transaction() as sess:
-        sess["authed"] = True
-    return c
+    return app.test_client()
 
 
 def test_route_get_returns_defaults(app_factory, tmp_path, monkeypatch):
@@ -90,11 +87,11 @@ def test_route_post_persists_and_reflects(app_factory, tmp_path, monkeypatch):
     assert again["lat"] == 50.4 and again["north_correction"] == 90.0
 
 
-def test_route_requires_auth(app_factory, tmp_path, monkeypatch):
+def test_route_open_without_auth(app_factory, tmp_path, monkeypatch):
     monkeypatch.setenv("COCKPIT_DATA_DIR", str(tmp_path))
-    app = app_factory()  # default PIN set → gate active
+    app = app_factory()  # no login gate → open access
     anon = app.test_client()
-    assert anon.get("/api/map-settings").status_code == 401
+    assert anon.get("/api/map-settings").status_code == 200
 
 
 def test_index_injects_map_settings(app_factory, tmp_path, monkeypatch):

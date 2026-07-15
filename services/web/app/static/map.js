@@ -251,6 +251,16 @@
     }
   }
 
+  // Re-measure the map after its container changed size (the grid<->control
+  // toggle moves #map-widgets between the full top half and the corner). Leaflet
+  // caches the container size, so without invalidateSize() the tiles/sector are
+  // laid out for the old box and render half-grey until the next interaction.
+  function relayout() {
+    if (!map) return;
+    map.invalidateSize();
+    redrawMap();
+  }
+
   // --- settings form ----------------------------------------------------------
   function fillForm() {
     for (const k in inputs) if (inputs[k]) inputs[k].value = cfg[k];
@@ -297,6 +307,7 @@
   update();
 
   // Exposed for cockpit.js: update() drives live gauges/needle at 5 Hz;
-  // fillForm() lets the top-left menu refresh the map inputs before showing.
-  window.mapWidgets = { update, fillForm };
+  // fillForm() lets the top-left menu refresh the map inputs before showing;
+  // relayout() re-measures the map after the grid<->control view toggle.
+  window.mapWidgets = { update, fillForm, relayout };
 })();

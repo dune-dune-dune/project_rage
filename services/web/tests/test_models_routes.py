@@ -17,12 +17,9 @@ from app.store import STATUS_PENDING, STATUS_READY
 
 @pytest.fixture
 def client(app_factory, tmp_path, monkeypatch):
-    """Authed client whose data dir (DB + model files) is the tmp dir."""
+    """Client whose data dir (DB + model files) is the tmp dir."""
     monkeypatch.setenv("COCKPIT_DATA_DIR", str(tmp_path))
-    c = app_factory().test_client()
-    with c.session_transaction() as sess:
-        sess["authed"] = True
-    return c
+    return app_factory().test_client()
 
 
 @pytest.fixture(autouse=True)
@@ -140,9 +137,9 @@ def test_index_injects_the_active_model(client):
     assert model["id"] in html
 
 
-def test_routes_require_auth(app_factory, tmp_path, monkeypatch):
+def test_routes_open_without_auth(app_factory, tmp_path, monkeypatch):
     monkeypatch.setenv("COCKPIT_DATA_DIR", str(tmp_path))
-    anon = app_factory().test_client()  # default PIN set → gate active
-    assert anon.get("/api/models").status_code == 401
-    assert anon.post("/api/models").status_code == 401
-    assert anon.get("/assets/models/abc123abc123/model.onnx").status_code == 401
+    anon = app_factory().test_client()  # no login gate → open access
+    assert anon.get("/api/models").status_code == 200
+    # A missing model asset is a 404, not an auth 401.
+    assert anon.get("/assets/models/abc123abc123/model.onnx").status_code == 404

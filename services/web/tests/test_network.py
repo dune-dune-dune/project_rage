@@ -76,9 +76,9 @@ def test_route_round_trip(authed_client):
     assert authed_client.get("/api/network-settings").get_json()["video_mode"] == "remote"
 
 
-def test_route_requires_auth(client):
-    assert client.get("/api/network-settings").status_code == 401
-    assert client.post("/api/network-settings", json={}).status_code == 401
+def test_route_open_without_auth(client):
+    # No login gate: the endpoint is reachable without any session.
+    assert client.get("/api/network-settings").status_code == 200
 
 
 def test_index_injects_cameras_for_the_active_mode(authed_client):

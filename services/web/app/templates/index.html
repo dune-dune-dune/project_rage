@@ -7,23 +7,29 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='vendor/leaflet/leaflet.css') }}?v={{ asset_version }}" />
   <link rel="stylesheet" href="{{ url_for('static', filename='cockpit.css') }}?v={{ asset_version }}" />
 </head>
-<body>
-  <!-- Fullscreen camera feed (WHEP / WebRTC from MediaMTX). -->
-  <video id="video" autoplay muted playsinline></video>
+<body class="mode-grid">
+  <!-- Landing / turret-picker view. The top half is the turret map (the
+       #map-widgets cluster, repositioned by CSS per mode); the bottom half is an
+       8-cell grid of turrets. Only cell 0 is wired to the (single) turret;
+       clicking it enters the control view. The control view and this grid are two
+       states of ONE page (body.mode-grid / body.mode-control) sharing the single
+       Leaflet map and the pre-connected camera videos — no reload, no second
+       map / RTCPeerConnection. Toggled by setView() in cockpit.js. -->
+  <div id="landing">
+    <div id="turret-grid">
+      <!-- Cell 0: the live turret. #stage holds the shared video stack; in the
+           grid it fills this cell as a live thumbnail, in the control view it
+           breaks out to fullscreen (CSS position:fixed). -->
+      <button type="button" id="turret-cell-0" class="turret-cell is-active" title="Відкрити керування">
+        <div id="stage">
+          <!-- Fullscreen camera feed (WHEP / WebRTC from MediaMTX). -->
+          <video id="video" autoplay muted playsinline></video>
 
-  <!-- YOLO detection overlay (drawn only in AI mode; shares the video's zoom). -->
-  <canvas id="detections" aria-hidden="true"></canvas>
+          <!-- YOLO detection overlay (drawn only in AI mode; shares the video's zoom). -->
+          <canvas id="detections" aria-hidden="true"></canvas>
 
-  <!-- Top-centre heading tape (compass). A horizontal degree ribbon that scrolls
-       with the turret's compass bearing (azimuth + north correction). The value
-       and tick geometry are drawn by compass.js, driven from map.js. -->
-  <div id="compass" aria-hidden="true">
-    <div id="compass-val">—</div>
-    <svg id="compass-tape" viewBox="0 0 480 46" preserveAspectRatio="xMidYMid meet"></svg>
-  </div>
-
-  <!-- Movable aiming crosshair (position from settings, persisted server-side). -->
-  <div id="crosshair" aria-hidden="true">
+          <!-- Movable aiming crosshair (position from settings, persisted server-side). -->
+          <div id="crosshair" aria-hidden="true">
     <svg viewBox="0 0 100 100" width="100" height="100">
       <circle cx="50" cy="50" r="26" fill="none" stroke-width="1.5" />
       <line x1="50" y1="6"  x2="50" y2="34" stroke-width="1.5" />
@@ -64,6 +70,42 @@
       </div>
     </div>
   </div>
+        </div><!-- /#stage -->
+        <div class="cell-label">
+          <span class="cell-name">Турель 1</span>
+          <span id="cell-video-dot" class="status-dot" data-tip="Статус відео: —"></span>
+        </div>
+      </button>
+
+      <!-- Cells 2–8: no turret assigned in this single-turret deployment. -->
+      <div class="turret-cell empty"><span>Немає турелі</span></div>
+      <div class="turret-cell empty"><span>Немає турелі</span></div>
+      <div class="turret-cell empty"><span>Немає турелі</span></div>
+      <div class="turret-cell empty"><span>Немає турелі</span></div>
+      <div class="turret-cell empty"><span>Немає турелі</span></div>
+      <div class="turret-cell empty"><span>Немає турелі</span></div>
+      <div class="turret-cell empty"><span>Немає турелі</span></div>
+    </div><!-- /#turret-grid -->
+  </div><!-- /#landing -->
+
+  <!-- Top-centre heading tape (compass). A horizontal degree ribbon that scrolls
+       with the turret's compass bearing (azimuth + north correction). The value
+       and tick geometry are drawn by compass.js, driven from map.js. Control
+       view only. -->
+  <div id="compass" aria-hidden="true">
+    <div id="compass-val">—</div>
+    <svg id="compass-tape" viewBox="0 0 480 46" preserveAspectRatio="xMidYMid meet"></svg>
+  </div>
+
+  <!-- Back to the turret grid (control view only, top-left). -->
+  <button id="grid-btn" title="До мапи турелей" aria-label="До мапи турелей">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="1.5" />
+      <rect x="14" y="3" width="7" height="7" rx="1.5" />
+      <rect x="3" y="14" width="7" height="7" rx="1.5" />
+      <rect x="14" y="14" width="7" height="7" rx="1.5" />
+    </svg>
+  </button>
 
   <!-- Top-left settings menu: one button → dropdown → the settings panels.
        Consolidates the former top-right ⚙ (crosshair + AI) and the on-map ⚙

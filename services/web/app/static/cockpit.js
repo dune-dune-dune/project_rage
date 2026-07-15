@@ -98,6 +98,10 @@ if (USE_WS) connectWs();
 
 document.addEventListener("keydown", (e) => {
   if (e.target instanceof HTMLInputElement) return; // don't hijack the sliders
+  // On the landing grid the operator is not controlling a turret: ignore every
+  // control key so nothing moves/fires while browsing the map (intent is already
+  // zeroed on entering the grid; the heartbeat keeps holding position).
+  if (document.body.classList.contains("mode-grid")) return;
   if (e.code === "Tab") {
     // Switch camera; block the default focus-cycling behaviour.
     e.preventDefault();
@@ -214,6 +218,7 @@ if (!heartbeatWorker) setInterval(sendInput, HEARTBEAT_MS); // fallback (bg-thro
 const noopBadge = () => ({ textContent: "", className: "" });
 const safetyEl = document.getElementById("safety") || noopBadge();
 const videoDot = document.getElementById("dot-video"); // video status dot → bottom bar
+const cellVideoDot = document.getElementById("cell-video-dot"); // same, on the grid cell
 const turretDot = document.getElementById("dot-turret"); // turret status dot → bottom bar
 const batteryEl = document.getElementById("battery");
 const moTempEl = document.getElementById("motemp");
@@ -245,12 +250,14 @@ function cameraKind(label) {
   return label;
 }
 
-// Map an RTCPeerConnection state to the video status word + colour.
+// Map an RTCPeerConnection state to the video status word + colour. Paints both
+// the bottom-bar dot (control view) and the grid cell's dot (landing view).
 function paintVideo(state) {
-  if (state === "connected") return setDot(videoDot, "Статус відео", "ok", "онлайн");
-  if (state === "connecting" || state === "new" || state === "checking")
-    return setDot(videoDot, "Статус відео", "", "підключення");
-  return setDot(videoDot, "Статус відео", "bad", "офлайн");
+  let cls = "bad", word = "офлайн";
+  if (state === "connected") { cls = "ok"; word = "онлайн"; }
+  else if (state === "connecting" || state === "new" || state === "checking") { cls = ""; word = "підключення"; }
+  setDot(videoDot, "Статус відео", cls, word);
+  if (cellVideoDot) setDot(cellVideoDot, "Статус відео", cls, word);
 }
 
 function paintKeys() {
@@ -808,3 +815,34 @@ window.cockpit = {
   get azDeg() { return lastAzDeg; },  // turret azimuth (deg) or null
   get elDeg() { return lastElDeg; },  // turret elevation (deg) or null
 };
+
+// ---------------------------------------------------------- view mode (grid/control)
+// The page has two states of ONE document: the landing turret grid (mode-grid)
+// and the fullscreen control view (mode-control). Toggling only reflows shared
+// DOM — the single Leaflet map (#map-widgets) and the pre-connected camera videos
+// (inside #stage) — so it is instant, with no reload and no second map/PC.
+//
+// Entering the grid neutralises motion/fire (like losing focus) so browsing the
+// map never drives the turret; the control heartbeat keeps flowing, so the turret
+// HOLDS its current aim while the operator is on the grid.
+function setView(mode) {
+  const control = mode === "control";
+  document.body.classList.toggle("mode-control", control);
+  document.body.classList.toggle("mode-grid", !control);
+  if (!control) releaseControls();
+  // The video box and the map container just changed size. Recompute the video
+  // transform (control view) and re-measure the map. rAF so the class-driven
+  // layout has settled before we read the new sizes.
+  requestAnimationFrame(() => {
+    if (control) applyView();
+    if (window.mapWidgets && window.mapWidgets.relayout) window.mapWidgets.relayout();
+  });
+}
+
+const gridCell = document.getElementById("turret-cell-0");
+if (gridCell) gridCell.addEventListener("click", () => setView("control"));
+const gridBtn = document.getElementById("grid-btn");
+if (gridBtn) gridBtn.addEventListener("click", () => setView("grid"));
+
+// Boot on the landing grid (the entry screen; the template also sets mode-grid).
+setView("grid");

@@ -103,12 +103,6 @@ class Settings:
     aim_timeout_ms: int
     ai_imgsz: int
 
-    # --- Auth ---
-    # 7-digit login PIN and the Flask session secret, both from .env. When ``pin``
-    # is empty the login gate is disabled and the cockpit is served openly.
-    pin: str
-    secret_key: str
-
     # --- Persistence ---
     # SQLite file holding every operator-tunable setting (crosshair, AI, map,
     # video/network profiles). Schema: app/migrations/*.sql.
@@ -270,8 +264,6 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         track_max_velocity=float(track.get("max_velocity", 0.5)),
         aim_timeout_ms=int(track.get("aim_timeout_ms", 500)),
         ai_imgsz=int(track.get("imgsz", 640)),
-        pin=os.environ.get("COCKPIT_PIN", "").strip(),
-        secret_key=os.environ.get("SECRET_KEY", "").strip(),
         db_file=str(_data_file("cockpit.db")),
         crosshair_file=str(_data_file("crosshair.json")),
         ai_settings_file=str(_data_file("ai_settings.json")),

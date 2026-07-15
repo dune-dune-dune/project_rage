@@ -12,10 +12,14 @@ html, body {
 
 #video,
 .cam-video {
-  position: fixed;
+  /* Absolute within #stage. In the control view #stage is fixed inset:0, so this
+     fills the viewport exactly as before; in the grid view #stage is the turret
+     cell, so the same rule makes the video a live thumbnail (transform is
+     neutralised in grid mode — see .mode-grid below). */
+  position: absolute;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
   background: #000;
   /* cockpit.js writes `translate(...) scale(...)` here: the digital zoom scales
@@ -36,10 +40,10 @@ html, body {
    they stay aligned with the zoomed #video. Sits above the video, below the
    crosshair and HUD. */
 #detections {
-  position: fixed;
+  position: absolute;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
   z-index: 3;
 }
@@ -96,9 +100,11 @@ html, body {
 #compass-tape .c-card-label { fill: #38ff9e; font-weight: 700; font-size: 12px; }
 #compass-tape .c-index { fill: #38ff9e; }
 
-/* Movable aiming crosshair. */
+/* Movable aiming crosshair. Absolute within #stage; applyView() writes left/top
+   in viewport px, which matches because #stage is fixed inset:0 in the control
+   view. Hidden in the grid view. */
 #crosshair {
-  position: fixed;
+  position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
@@ -550,3 +556,153 @@ html, body {
 /* Pulse animation retained — used by the bottom telemetry bar's low-battery
    warning (.tele:has(.tele-val.armed)). The former left HUD was removed. */
 @keyframes pulse { 50% { opacity: 0.55; } }
+
+/* ===================================================================
+   Landing / turret-picker view and the grid<->control mode toggle.
+
+   The page has two states, toggled by a class on <body> (setView() in
+   cockpit.js):
+     .mode-grid    — the landing screen: turret map (top half) + an 8-cell
+                     turret grid (bottom half). One cell holds the live turret.
+     .mode-control — the fullscreen control view (video + HUD + mini map).
+
+   Both states share the SAME Leaflet map (#map-widgets) and the SAME
+   pre-connected camera videos (inside #stage). Switching just repositions
+   those elements with CSS — no reload, no second map / PeerConnection.
+
+   #stage lives inside turret cell 0. In the grid it is absolutely filling that
+   cell (a live thumbnail); in the control view it is position:fixed inset:0 so
+   it "breaks out" to fullscreen. #landing keeps a LOW z-index (1) so all the
+   fixed control-view chrome (compass 12, telemetry 15, map 16, buttons 25)
+   paints above the fullscreen #stage. =================================== */
+
+#landing {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  background: #05080b;
+}
+
+#turret-grid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;            /* bottom half of the screen */
+  bottom: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  grid-template-rows: repeat(2, 1fr);
+  gap: 10px;
+  padding: 10px;
+}
+
+.turret-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  color: #6b7a83;
+  font-size: 13px;
+}
+.turret-cell.empty span { opacity: 0.5; }
+
+/* Cell 0 is a <button>: reset the UA button styling and mark it interactive. */
+.turret-cell.is-active {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-color: rgba(56, 255, 158, 0.5);
+}
+.turret-cell.is-active:hover {
+  border-color: #38ff9e;
+  box-shadow: 0 0 0 2px rgba(56, 255, 158, 0.3);
+}
+
+/* Caption + video-status dot, pinned to the live cell's lower-left. */
+.cell-label {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #e8f0f2;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* Shared video container. Absolute inside the cell by default (grid thumbnail);
+   fixed fullscreen in the control view. */
+#stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+}
+body.mode-control #stage {
+  position: fixed;
+  inset: 0;
+  z-index: 0; /* within #landing's stacking context; chrome above sits over it */
+}
+
+/* Back-to-grid button (control view only), just right of the ⚙ menu button. */
+#grid-btn {
+  display: none;
+  position: fixed;
+  top: 14px;
+  left: 62px;
+  z-index: 25;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(0, 0, 0, 0.5);
+  color: #e8f0f2;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+#grid-btn:hover { background: rgba(0, 0, 0, 0.7); }
+#grid-btn svg { width: 20px; height: 20px; }
+body.mode-control #grid-btn { display: flex; }
+
+/* --- Grid mode: hide the control-view chrome; enlarge the map to the top half. */
+body.mode-grid #compass,
+body.mode-grid #telemetry-bar,
+body.mode-grid #menu-btn,
+body.mode-grid #menu-dropdown,
+body.mode-grid .menu-panel,
+body.mode-grid #crosshair,
+body.mode-grid #detections { display: none !important; }
+
+/* The video keeps object-fit: cover in the cell but must drop the fullscreen
+   pan/zoom transform applyView() writes for the control view. */
+body.mode-grid .cam-video { transform: none !important; }
+
+/* Promote the map cluster to the full top half; drop the range gauges. */
+body.mode-grid #map-widgets {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 50vh;
+  width: auto;
+  z-index: 2;
+  padding: 10px;
+  gap: 0;
+}
+body.mode-grid #map-square {
+  width: 100%;
+  height: 100%;
+}
+body.mode-grid .map-gauges { display: none; }

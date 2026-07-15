@@ -51,7 +51,7 @@ project_rage/
 │   ├── web/                  # Flask + Gunicorn cockpit (browser → RWS UDP → turret)
 │   │   ├── app/{__init__,config,turret,routes,ws,db,store,model_jobs,wsgi}.py  # factory, settings, control, routes, /api/ws, SQLite, stores, model conversion jobs
 │   │   ├── app/migrations/*.sql  # schema + seed + models table, applied once at startup (see its README)
-│   │   ├── app/templates/{index,login}.html + app/static/{cockpit.js,ai.js,ai-worker.js,models.js,heartbeat-worker.js,map.js,compass.js,cockpit.css}  # video + HUD + YOLO (worker) + AI model library + bg-tab heartbeat worker + map/gauges + compass + PIN login
+│   │   ├── app/templates/index.html + app/static/{cockpit.js,ai.js,ai-worker.js,models.js,heartbeat-worker.js,map.js,compass.js,cockpit.css}  # landing grid + video + HUD + YOLO (worker) + AI model library + bg-tab heartbeat worker + map/gauges + compass
 │   │   ├── app/static/vendor/  # onnxruntime-web (fetch_ort.sh) + leaflet/ (fetch_leaflet.sh)
 │   │   ├── scripts/{export_onnx.py,fetch_ort.sh,fetch_leaflet.sh}  # offline: best.pt→best.onnx, fetch ORT web, vendor Leaflet
 │   │   ├── tests/ + conftest.py + pytest.ini  # pytest suite (speed, ramp, timing, turret, auth, routes, ws, db, network, models)
@@ -60,7 +60,7 @@ project_rage/
 │   │   ├── data/models/<id>/{source.pt|source.onnx,model.onnx,classes.json}  # the AI model library (gitignored)
 │   │   ├── data/model/best.pt (+ best.onnx, classes.json)  # pre-library weights; imported once as the builtin model
 │   │   ├── settings.toml     # control tuning (rates, ramp_ms, axes, fire, speed_levels, [track] AI servo) — NOT secrets
-│   │   ├── .env.example       # turret-network/deploy env template incl. COCKPIT_PIN/SECRET_KEY (user creates .env)
+│   │   ├── .env.example       # turret-network/deploy env template (user creates .env; no auth — cockpit is open)
 │   │   ├── Dockerfile + docker-compose.yml   # cockpit (:8000, host net) + exporter (:8901) + video_gateway
 │   │   ├── docker-compose.jetson.yml # prod override: /dev/ttyUSB0 rangefinder passthrough + RANGEFINDER_ENABLED
 │   └── video_gateway/mediamtx.yml   # MediaMTX: RTSP cameras → WebRTC/WHEP
@@ -257,13 +257,25 @@ is exactly why the paths are UI-editable, switch them to `cam*_h264` if the remo
 session so the motors HOLD position (drops only on the deadman neutral packet); fire needs safety
 disengaged (ARMED).
 
-**Login (PIN):** if `COCKPIT_PIN` (7 digits) is set in `.env`, a `before_request` gate protects the
-whole cockpit — everything except `/healthz`, `/login` and static assets redirects unauthenticated
-page requests to `/login` and returns `401` for `/api`/`/assets`. `GET/POST /login` renders/validates a
-minimal PIN page (`app/templates/login.html`; constant-time `hmac.compare_digest`), `GET /logout` clears
-the session. Sessions are signed with `SECRET_KEY` from `.env` (set a stable value so they survive
-restarts; otherwise an ephemeral key is used and a warning is logged). **Empty `COCKPIT_PIN` disables the
-gate** (open access) — a warning is logged.
+**No login gate (open access).** The former 7-digit `COCKPIT_PIN` login was removed
+(`login.html`, `/login`, `/logout` and the `before_app_request` auth hook are all gone; `COCKPIT_PIN`
+/`SECRET_KEY` are no longer read). ⚠️ The cockpit is served **openly** — put it behind a trusted
+LAN / VPN. An ephemeral Flask `secret_key` is still set (`__init__.py`) but nothing uses the session.
+
+**Landing view (turret grid ↔ control).** The entry screen is a **landing view**, not the control page:
+the top half is a large turret **map** (the same `#map-widgets` Leaflet cluster + azimuth sector as the
+control view's mini-map), the bottom half is an **8-cell grid** of turrets. In this single-turret
+deployment only **cell 0** is live — it shows the active camera as a thumbnail (`#stage`) and is
+clickable; the other 7 are empty «Немає турелі» placeholders. Clicking cell 0 enters the **control
+view**; a **grid button** (`#grid-btn`, top-left, next to ⚙) returns to the landing. These are **two
+states of one page** — `body.mode-grid` / `body.mode-control`, toggled by `setView()` in `cockpit.js`
+— **not** separate pages: both share the single Leaflet map and the pre-connected camera videos, so the
+switch is instant (no reload, no second map/`RTCPeerConnection`). `#stage` (the shared video stack)
+lives inside cell 0 and is CSS-repositioned — `position:absolute` filling the cell in the grid,
+`position:fixed inset:0` fullscreen in control. On each toggle `setView()` re-runs `applyView()`
+(control) and `window.mapWidgets.relayout()` (Leaflet `invalidateSize`, since the map container
+resized). Control keys (WASD/Space/etc.) are **ignored in grid mode** and motion/fire is neutralised on
+entry, but the heartbeat keeps flowing so the turret **holds its aim** while the operator is on the map.
 
 **Crosshair-centred zoom (wide camera only):** the crosshair offset is a **boresight calibration** — the
 frame point the jet actually hits. On the **wide camera (CAM 95)** the reticle is pinned to the geometric
@@ -316,9 +328,10 @@ model. In brief:
 - **web cockpit** (`services/web/`): Flask serves the page; a single `TurretController` background
   thread streams RWS UDP at 20 Hz. Movement is always available; the F safety gates **firing only**
   (software fire interlock: `fire='F'` only when safety disengaged). 400 ms deadman, single Gunicorn
-  worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. A 7-digit-PIN
-  login gate (`COCKPIT_PIN` in `.env`) protects all routes except `/healthz`/`/login`/static.
-  Rotation speed is switchable at runtime with keys `1`/`2`/`3` (`speed_level` on `/api/input`, levels from
+  worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. **No auth gate** —
+  the cockpit is served openly (the former PIN login was removed); front it with a trusted network/VPN.
+  The entry screen is the **landing view** (turret map + 8-cell grid), a client-side mode of the same
+  page as the control view (see «Landing view» above). Rotation speed is switchable at runtime with keys `1`/`2`/`3` (`speed_level` on `/api/input`, levels from
   `[control] speed_levels` = `[100, 50, 1]`; the boot default is the highest percent,
   `Settings.default_speed_index`). The one-time **jerk at movement start** was traced to the position channel:
   the cockpit used to toggle the `ROT_P`/`ELE_P` valid bits off→on and jump the target 0→±π on the first
@@ -340,7 +353,7 @@ model. In brief:
   WebSocket path **`/api/ws`** (flask-sock) exists server-side but is **OFF by default** on the client
   (`USE_WS=false` in `cockpit.js`) pending real-hardware validation — a half-open WS can report
   `readyState===OPEN` while dropping frames, black-holing the heartbeat and tripping the deadman. HTTP
-  routes: `/`, `/healthz`, `/login` (GET/POST), `/logout`, `/api/input`, `/api/status`,
+  routes: `/`, `/healthz`, `/api/input`, `/api/status`,
   `/api/crosshair` (GET/POST), `/api/track` (POST auto-aim velocity),
   `/api/ai-settings` (GET/POST conf + min size), `/api/map-settings` (GET/POST map origin lat/lon +
   north_correction), `/api/network-settings` (GET/POST video profiles + active mode),
@@ -348,8 +361,7 @@ model. In brief:
   `/api/models/<id>/activate` (POST), `/api/models/<id>/rename` (POST), `/api/models/<id>` (DELETE),
   `/assets/models/<id>/model.onnx` + `/assets/models/<id>/classes.json`,
   `/assets/model.onnx`, `/assets/classes.json` (redirect to the active model);
-  WebSocket route: `/api/ws` (control input). The PIN gate is registered app-wide
-  (`before_app_request`) so it also protects `/api/ws`.
+  WebSocket route: `/api/ws` (control input). All routes are open (no auth gate).
 - **AI auto-track** runs client-side (`ai.js`, ONNX Runtime Web); the server only receives the resulting
   aim velocity via `/api/track` and applies it as a velocity override (aim-only — never touches `arm`/`fire`).
   A dedicated aim timeout (`[track].aim_timeout_ms`, default 500 ms) zeroes the aim if the browser stalls.
