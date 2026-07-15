@@ -651,8 +651,20 @@ html, body {
 body.mode-control #stage {
   position: fixed;
   inset: 0;
-  z-index: 0; /* within #landing's stacking context; chrome above sits over it */
+  /* Positive z-index so the fullscreen video paints ABOVE the sibling grid cells
+     (which are position:relative and come later in the DOM, so at z:auto they
+     would otherwise show through). Still inside #landing's stacking context
+     (z:1), so the body-level control chrome (compass/telemetry/map/buttons) sits
+     over it. */
+  z-index: 1;
 }
+
+/* In the control view the grid chrome is fully covered by the fullscreen #stage,
+   but hide the empty cells / caption / cell border outright so nothing can peek
+   through at the edges. #stage stays (it is inside cell 0, not the grid itself). */
+body.mode-control .turret-cell.empty,
+body.mode-control .cell-label { display: none; }
+body.mode-control .turret-cell.is-active { border: none; border-radius: 0; }
 
 /* Back-to-grid button (control view only), just right of the ⚙ menu button. */
 #grid-btn {
