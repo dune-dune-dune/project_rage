@@ -75,6 +75,13 @@ class Settings:
     # --- Control tuning (settings.toml) ---
     send_rate_hz: int
     deadman_ms: int
+    # Second deadman stage. Between deadman_ms and failsafe_ms the turret HOLDS
+    # position with the motors energized (no motion/fire) rather than
+    # de-energizing, so a network stall does not make it sag off aim and clunk
+    # back when input resumes. Only past failsafe_ms does it go fully inert
+    # (ENABLE off, disarmed) — the true fail-safe for a dead browser. <= 0
+    # disables full neutralization entirely (hold aim indefinitely on signal loss).
+    failsafe_ms: int
     # Velocity soft-start: time (ms) to ramp a manual axis from 0 to full scale.
     # Removes the one-time jerk at movement start. 0 disables the ramp (instant).
     ramp_ms: int
@@ -142,6 +149,11 @@ class Settings:
     @property
     def deadman_seconds(self) -> float:
         return self.deadman_ms / 1000.0
+
+    @property
+    def failsafe_seconds(self) -> float:
+        """Full-neutral threshold; never shorter than the motion deadman."""
+        return max(self.failsafe_ms, self.deadman_ms) / 1000.0
 
     @property
     def accel_per_tick(self) -> float:
@@ -250,6 +262,7 @@ def load_settings(settings_path: Path | None = None) -> Settings:
         rangefinder_measure_interval_ms=int(control.get("rangefinder_measure_interval_ms", 250)),
         send_rate_hz=int(control.get("send_rate_hz", 20)),
         deadman_ms=int(control.get("deadman_ms", 400)),
+        failsafe_ms=int(control.get("failsafe_ms", 30000)),
         ramp_ms=int(control.get("ramp_ms", 250)),
         speed_percent=int(control.get("speed_percent", 100)),
         speed_levels=_parse_speed_levels(control.get("speed_levels", [50, 100])),

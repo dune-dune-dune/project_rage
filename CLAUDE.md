@@ -327,7 +327,11 @@ model. In brief:
   WebSocket (`:8765`).
 - **web cockpit** (`services/web/`): Flask serves the page; a single `TurretController` background
   thread streams RWS UDP at 20 Hz. Movement is always available; the F safety gates **firing only**
-  (software fire interlock: `fire='F'` only when safety disengaged). 400 ms deadman, single Gunicorn
+  (software fire interlock: `fire='F'` only when safety disengaged). **Two-stage deadman**: no fresh
+  browser input for `deadman_ms` (400 ms) **holds position with the motors energized** (ENABLE on, motion
+  ramped to 0, disarmed) so a network stall does not sag the aim + clunk on recovery; only past
+  `failsafe_ms` (30000 ms; `<=0` never de-energizes — holds aim indefinitely) does it go fully inert
+  (ENABLE off). Single Gunicorn
   worker (sole UDP/sequence owner). Drives the turret directly, not via `rws_bridge`. **No auth gate** —
   the cockpit is served openly (the former PIN login was removed); front it with a trusted network/VPN.
   The entry screen is the **landing view** (turret map + 8-cell grid), a client-side mode of the same

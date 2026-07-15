@@ -366,12 +366,30 @@ class TurretController:
             self._last_input_monotonic = now  # keep the deadman fed while tracking
 
     def _read_intent(self, now: float) -> _Intent | None:
-        """Return a snapshot of intent, or None if the deadman has expired."""
+        """Return a snapshot of intent, or None once the motion deadman expires.
+
+        None means "do not drive motion from the operator": past ``deadman_ms``
+        the turret either holds position (brief gap) or goes fully neutral (past
+        ``failsafe_ms``) — the loop decides which via :meth:`_input_expired`.
+        """
         with self._lock:
             if now - self._last_input_monotonic > self._s.deadman_seconds:
-                return None  # fail-safe: no fresh input -> fully neutral packet
+                return None  # motion deadman: stop driving from operator input
             # Shallow copy so the sender thread reads a stable snapshot.
             return _Intent(**vars(self._intent))
+
+    def _input_expired(self, now: float) -> bool:
+        """True when input is stale past the *failsafe* window (fully de-energize).
+
+        Between the motion deadman and this the turret holds position with the
+        motors energized instead, so a network stall does not sag the aim.
+        ``failsafe_ms <= 0`` disables full neutralization entirely: the turret
+        holds position indefinitely (still motion/fire-inert) until input returns
+        or the process stops."""
+        if self._s.failsafe_ms <= 0:
+            return False
+        with self._lock:
+            return now - self._last_input_monotonic > self._s.failsafe_seconds
 
     def _read_aim(self, now: float) -> tuple[bool, float, float]:
         """Return (active, rot_v, ele_v) for auto-track, or inert if stale."""
@@ -395,10 +413,14 @@ class TurretController:
                 self._try_open_channel(now)
 
             intent = self._read_intent(now)
-            if intent is None:
+            if intent is not None:
+                packet = self._build_packet(intent, self._read_aim(now), now)
+            elif self._input_expired(now):
+                # Stale past the failsafe: fully inert (ENABLE off, disarmed).
                 packet = self._neutral_packet()
             else:
-                packet = self._build_packet(intent, self._read_aim(now), now)
+                # Brief input gap (network stall): hold position, motors on.
+                packet = self._hold_packet(now)
             try:
                 if self._channel is not None:
                     self._channel.send_command(packet)
@@ -444,6 +466,16 @@ class TurretController:
             flags1=0, flags2=0, rotation_v=0, elevation_v=0,
             rotation_p=0, elevation_p=0, arm=_ARM_OFF, fire=_FIRE_OFF, fire_duration=0,
         )
+
+    def _hold_packet(self, now: float) -> rws_control.CommandPacket:
+        """Position-hold packet for a brief input gap (network stall).
+
+        Keeps ENABLE on and holds the turret's current angle (P valid) while the
+        velocity ramp slews to zero and the turret disarms — the motors stay
+        energized, so the turret neither sags off aim nor clunks back when input
+        resumes. Reuses the normal build path with an all-neutral intent and no
+        auto-track aim, so the same soft-stop and position-hold logic applies."""
+        return self._build_packet(_Intent(), (False, 0.0, 0.0), now)
 
     def _build_packet(
         self, intent: _Intent, aim: tuple[bool, float, float], now: float

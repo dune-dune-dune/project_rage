@@ -109,7 +109,15 @@ Key properties of the cockpit's `TurretController` ([`services/web/app/turret.py
   cycle. It needs real-hardware validation before enabling. Both paths call the same `apply_input`, so
   the 20 Hz loop/deadman are transport-agnostic. The PIN gate is app-wide (`before_app_request`), so it
   guards `/api/ws` too.
-- **Deadman.** If no browser input arrives for `deadman_ms` (default 400 ms), the sender forces neutral.
+- **Deadman (two-stage).** If no browser input arrives for `deadman_ms` (default 400 ms) the sender stops
+  driving motion but **holds position with the motors energized** (ENABLE on, velocity ramped to 0,
+  position target = current angle, disarmed) — a brief network stall no longer de-energizes the turret and
+  makes it sag off aim + clunk back when input resumes. Only past `failsafe_ms` (default 30000 ms, sized
+  above the longest expected dropout) does the sender force a fully neutral packet (ENABLE off, disarmed)
+  — the real fail-safe for a dead browser. `failsafe_ms <= 0` disables full neutralization entirely (the
+  turret holds aim indefinitely on signal loss; the 400 ms motion deadman still stops motion, and the hold
+  is disarmed, so it can neither move nor fire).
+  (`turret.py:_read_intent`/`_input_expired`/`_hold_packet`.)
 - **Dry-run.** `RWS_DRY_RUN=true` (default) never opens the socket; packets are built and logged only.
 - **Crosshair.** An adjustable aiming crosshair (⚙ panel) is persisted to SQLite via
   `GET`/`POST /api/crosshair` for reuse by later tooling.
@@ -422,7 +430,8 @@ dependency (stdlib `sqlite3`), and the file sits in the existing `./data` bind m
 
 Control **tuning** lives separately in [`settings.toml`](../services/web/settings.toml) (read via
 stdlib `tomllib`, mounted read-only into the container so it can be edited without a rebuild):
-`[control]` send_rate_hz (20), deadman_ms (400), ramp_ms (250, velocity soft-start; 0 disables),
+`[control]` send_rate_hz (20), deadman_ms (400, motion-stop + position-hold), failsafe_ms (30000,
+full de-energize; <=0 never de-energizes), ramp_ms (250, velocity soft-start; 0 disables),
 speed_percent (100), `speed_levels` (percent list
 selectable with keys 1..N, default `[100, 50, 1]`); `[axes]` rotation/elevation unit
 amplitudes; `[fire]` mode + short/medium durations; `[track]` AI visual-servo `gain` (2.5), `deadzone`

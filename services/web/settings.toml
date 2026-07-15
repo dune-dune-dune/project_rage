@@ -3,7 +3,15 @@
 
 [control]
 send_rate_hz = 20        # command stream cadence (20 Hz = 50 ms period)
-deadman_ms = 400         # no fresh browser input for longer than this -> neutral
+deadman_ms = 400         # no fresh browser input for longer than this -> stop motion + hold position
+# Second deadman stage: past this (and until then, position is HELD with motors on)
+# the turret goes fully inert (ENABLE off, disarmed). Bridges network stalls so an
+# unstable link no longer makes the turret sag off aim and clunk on recovery.
+# During the hold the turret is disarmed and motion-stopped, so it can neither
+# move nor fire — only the position hold stays powered. Set above the longest
+# expected dropout. Set to 0 to DISABLE full neutralization entirely (hold aim
+# indefinitely on signal loss; the motion deadman above still stops motion).
+failsafe_ms = 30000
 ramp_ms = 250            # soft-start: ms to ramp a manual axis 0 -> full; 0 disables
 speed_percent = 100      # global speed scale, 10..100
 # Min spacing (ms) between turret rangefinder requests while Shift is held. Paces
