@@ -42,8 +42,13 @@ services:
     network_mode: host
     cap_add:
       - NET_ADMIN
-    sysctls:
-      - net.ipv4.conf.all.src_valid_mark=1
+    # NOTE: no `sysctls:` here. Under network_mode: host, runc refuses namespaced
+    # net.* sysctls ("not allowed in host network namespace"). wg-quick only needs
+    # net.ipv4.conf.all.src_valid_mark=1 when AllowedIPs is a default route
+    # (0.0.0.0/0), which sets up fwmark policy routing — our config routes only
+    # 10.31.0.0/24, so it is never touched. If you ever widen AllowedIPs to a
+    # default route, set that sysctl on the HOST instead (e.g. /etc/sysctl.d),
+    # since a host-networked container cannot.
     volumes:
       # linuxserver/wireguard brings up every *.conf under /config/wg_confs.
       - ./data/wg-targets.conf:/config/wg_confs/wg-targets.conf:ro
